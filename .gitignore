@@ -1,0 +1,30 @@
+# ── Secrets: node_seed values must NEVER be committed ─────────────────────────
+# A directory-level ignore cannot be un-ignored from inside, so ignore the
+# CONTENTS and re-include only the two files that are safe to track.
+secrets/*
+!secrets/README.md
+!secrets/seeds.env.example
+*.env
+!*.env.example
+
+# ── Rendered configs may contain a real node_seed ─────────────────────────────
+out/
+config/rendered/
+*.cfg.rendered
+xahaud.cfg
+!config/xahaud.cfg.j2
+
+# ── Cluster fragments are regenerated from live nodes ─────────────────────────
+cluster/rendered/*
+!cluster/rendered/.gitkeep
+
+# ── Runtime / local noise ─────────────────────────────────────────────────────
+*.log
+*.tar
+*.tar.gz
+*.tgz
+.state/
+backups/
+__pycache__/
+*.pyc
+.DS_Store

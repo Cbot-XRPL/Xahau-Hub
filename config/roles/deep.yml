@@ -1,0 +1,34 @@
+# ── ROLE: deep ────────────────────────────────────────────────────────────────
+#  xah-node-1. Deep history, rolling window, disk-pressure-driven pruning.
+#
+#  INVARIANT: ledger_history < online_delete.
+#  If ledger_history >= online_delete the node fetches history only to delete
+#  it again — endless backfill churn that never converges.
+#
+#  ledger_history_initial is what actually gets rendered until
+#  docs/DECISIONS.md records a measured GB-per-million-ledgers figure. Start
+#  low to get a measurement in a reasonable window, then raise toward
+#  ledger_history once it is clear the window fits under the 700 GiB cap.
+#  Promote with:  make render NODE=xah-node-1 HISTORY=final
+# ──────────────────────────────────────────────────────────────────────────────
+role: deep
+node_size: huge
+peers_max: 40
+
+online_delete: 4000000
+ledger_history: 3500000
+ledger_history_initial: 2000000
+
+advisory_delete: 1                 # nothing prunes until can_delete is called
+use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
+
+# SQLite — must be set at FIRST START. Changing later requires `xahaud --vacuum`
+# which can run for days on a history server. See docs/DECISIONS.md.
+sqlite_page_size: 32768
+sqlite_journal_mode: wal
+sqlite_synchronous: normal
+sqlite_temp_store: file
+
+# Rolling-window pruning is driven by ops/prune-guard.sh from disk pressure,
+# not by xahaud's internal count-based schedule.
+prune_trigger_pct: 70

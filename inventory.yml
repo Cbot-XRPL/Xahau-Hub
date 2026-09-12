@@ -1,0 +1,200 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  inventory.yml — SINGLE SOURCE OF TRUTH for the Xahau node cluster
+#
+#  Every script in this repo reads this file. Adding node 3 means adding one
+#  entry under `nodes:` (flip `enabled: true`) and re-running:
+#     make create-vm NODE=xah-node-3
+#     make attach-db NODE=xah-node-3
+#     make bootstrap NODE=xah-node-3
+#     make cluster            # re-renders [cluster_nodes]/[ips_fixed] for ALL
+#
+#  Parsed by lib/inventory.py (restricted YAML subset: maps, lists, scalars).
+# ══════════════════════════════════════════════════════════════════════════════
+
+cluster:
+  name: xahau-hub
+  network: mainnet
+  network_id: 21337
+  phase: 1
+
+  # ── Target host. Scripts that run on the host REFUSE to run anywhere else ──
+  host:
+    name: pve2
+    model: R740
+    address: 192.168.1.120
+    idrac: 192.168.1.105
+    pve_version: "9.2-1"
+    storage: local-lvm              # thin pool, phase 1
+    storage_vg: pve
+    storage_thinpool: data
+    pool_physical_gib: 1752         # measured: 1837621248 KiB ~= 1752 GiB
+    reserve_gib: 256                # MUST stay unprovisioned. No overcommit.
+    ssh_user: root
+
+  # ── HARD GUARD LIST ───────────────────────────────────────────────────────
+  #  CT 200 on `pve` (R730xd) is a LIVE UNL VALIDATOR with its own RAID and
+  #  its own keys. Nothing in this repo may reference, connect to, cluster
+  #  with, or copy anything from it. lib/guard.sh enforces this list on every
+  #  host-side and ssh-side operation.
+  forbidden:
+    hosts:
+      - pve
+      - pve1
+      - r730xd
+      - r730
+    host_addresses:
+      - 192.168.1.121               # pve (R730xd) — ADJUST IF WRONG, never remove
+    vmids:
+      - 100                         # CT 100 on pve — Nginx Proxy Manager
+      - 200                         # CT 200 on pve — UNL VALIDATOR. NEVER TOUCH.
+    reason: >-
+      CT 200 on pve (R730xd) is the production UNL validator. It has its own
+      storage and its own validator/node keys. This repo must never touch it.
+      VMID 100 on pve2 is the local Claude repo builder VM (400 GiB) and VMID
+      100 on pve is NPM; both are off limits to provisioning scripts here.
+
+  # ── Ports. Admin is 127.0.0.1-only and is NEVER proxied. ──────────────────
+  ports:
+    rpc_admin: 5005                 # 127.0.0.1 ONLY
+    peer: 21337
+    ws_public: 6006                 # proxied via NPM
+    rpc_public: 5007                # proxied via NPM
+
+  # ── Proxy (already running, do not provision from here) ───────────────────
+  proxy:
+    kind: nginx-proxy-manager
+    location: "CT 100 on pve (R730xd) — DO NOT MODIFY THE CONTAINER FROM HERE"
+    tls: terminated-at-proxy
+    proxied_ports: [6006, 5007]
+
+  # ── VM defaults applied by provision/10-create-vm.sh ──────────────────────
+  defaults:
+    ostype: l26
+    cpu: host                       # kvm64 hides AES/SHA/AVX -> slow sig verify
+    balloon: 0                      # xahaud will not tolerate reclaim
+    onboot: 1
+    scsihw: virtio-scsi-single
+    bridge: vmbr0
+    gateway: 192.168.1.1
+    netmask_cidr: 24
+    nameservers: "1.1.1.1 9.9.9.9"
+    disk_opts: "iothread=1,discard=on,ssd=1"
+    guest_os: "ubuntu-24.04-lts"
+    iso: "local:iso/ubuntu-24.04.3-live-server-amd64.iso"
+    cloudimg_url: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+
+    # ── xahaud install layout ────────────────────────────────────────────────
+    #  The official installer lays down /opt/xahaud/... and a systemd unit; we
+    #  keep the config at the spec's path and symlink the installer's expected
+    #  location to it so both agree. VERIFY the installer URL before first use.
+    xahaud_user: xahaud
+    xahaud_prefix: /opt/xahaud
+    xahaud_bin: /opt/xahaud/bin/xahaud
+    xahaud_cfg_dir: /etc/opt/xahaud
+    xahaud_cfg: /etc/opt/xahaud/xahaud.cfg
+    xahaud_log_dir: /var/log/xahaud
+    xahaud_service: xahaud
+    installer_url: "https://raw.githubusercontent.com/Xahau/xahaud/dev/release-builds/xahaud-install-update.sh"
+    ops_dir: /opt/xahau-hub
+    db_mount: /var/lib/xahaud
+    db_label: xahdb
+    db_fs: xfs
+
+  # ── Growth / prune thresholds (see docs/DECISIONS.md) ─────────────────────
+  thresholds:
+    db_warn_pct: 60                 # growth-watch.sh warn
+    db_crit_pct: 80                 # growth-watch.sh loud alert
+    pool_warn_pct: 60               # thin pool data% AND metadata%
+    pool_crit_pct: 80
+    prune_trigger_pct: 70           # prune-guard.sh fires can_delete
+    lvm_autoextend_threshold: 80
+    lvm_autoextend_percent: 0       # 0 = do not autoextend, alert only
+    prune_interval: "0 */2 * * *"
+    growth_interval: "0 */6 * * *"
+    health_interval: "*/10 * * * *"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NODES
+#  phase 1 = two nodes, 60 GB RAM total, both on local-lvm.
+#  Node 3 is a config addition, not a rebuild: flip enabled -> true.
+# ══════════════════════════════════════════════════════════════════════════════
+nodes:
+  - name: xah-node-1
+    vmid: 110
+    role: deep
+    phase: 1
+    enabled: true
+    public: true
+    address: 192.168.1.110
+    vcpu: 8
+    ram_mb: 32768
+    root_gib: 48
+    db_gib: 700                     # containment boundary, NOT a hw limit
+    storage: local-lvm
+    db_storage: local-lvm
+    ssh_user: root
+    seed_var: XAH_NODE_1_SEED
+    notes: >-
+      Deep history node. Backfills first. Keep OUT of the public pool until
+      latency is characterised; deep queries route here explicitly.
+
+  - name: xah-node-2
+    vmid: 111
+    role: api
+    phase: 1
+    enabled: true
+    public: true
+    address: 192.168.1.111
+    vcpu: 6
+    ram_mb: 28672
+    root_gib: 48
+    db_gib: 300
+    storage: local-lvm
+    db_storage: local-lvm
+    ssh_user: root
+    seed_var: XAH_NODE_2_SEED
+    notes: >-
+      General API node. Seeded from node 1 via ops/seed-node.sh, never
+      backfilled independently from the network. Primary public upstream.
+
+  # ── PHASE 2 — after the 384 GB RAM upgrade and the 4 TB NVMe. ─────────────
+  #    Set enabled: true and follow docs/PHASE-2.md. Nothing else changes.
+  - name: xah-node-3
+    vmid: 112
+    role: api
+    phase: 2
+    enabled: false
+    public: true
+    address: 192.168.1.112
+    vcpu: 8
+    ram_mb: 32768
+    root_gib: 48
+    db_gib: 400                     # from nvme-vg free space
+    storage: local-lvm              # root stays on the RAID 10
+    db_storage: nvme-vg             # DB on NVMe (see provision/00-nvme-setup.sh)
+    ssh_user: root
+    seed_var: XAH_NODE_3_SEED
+    notes: >-
+      Phase 2 only. Requires RAM upgrade (384 GB) AND the NVMe installed.
+      Role may be flipped to `deep` if measured GB/million justifies it.
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PHASE 1.5 — NVMe layout, consumed by provision/00-nvme-setup.sh
+#  Hardware NOT YET PRESENT. Install the x4 adapter in slot 2, 3, 5 or 7 and
+#  leave the x16 slots (1, 4, 8) free for a future GPU.
+# ══════════════════════════════════════════════════════════════════════════════
+nvme:
+  device: /dev/nvme0n1
+  vg: nvme-vg
+  pve_storage_id: nvme-lvm
+  expected_size_tb: 4
+  pcie_slots_allowed: [2, 3, 5, 7]
+  pcie_slots_reserved_for_gpu: [1, 4, 8]
+  volumes:
+    - node: xah-node-1
+      lv: lv-xah1-db
+      size_gib: 1000
+    - node: xah-node-2
+      lv: lv-xah2-db
+      size_gib: 400
+  # remainder stays unallocated: node 3 + headroom to raise caps

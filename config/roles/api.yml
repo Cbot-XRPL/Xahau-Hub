@@ -1,0 +1,23 @@
+# ── ROLE: api ─────────────────────────────────────────────────────────────────
+#  xah-node-2 (and xah-node-3 in phase 2). Shallow window that covers the
+#  overwhelming majority of real queries. Deep requests route to xah-node-1.
+#
+#  INVARIANT: ledger_history < online_delete.
+# ──────────────────────────────────────────────────────────────────────────────
+role: api
+node_size: large
+peers_max: 30
+
+online_delete: 600000
+ledger_history: 500000
+ledger_history_initial: 500000     # shallow enough to start at the final value
+
+advisory_delete: 1
+use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
+
+sqlite_page_size: 32768
+sqlite_journal_mode: wal
+sqlite_synchronous: normal
+sqlite_temp_store: file
+
+prune_trigger_pct: 70
