@@ -50,7 +50,8 @@ make guards      # 35 assertions. Fails the build if a guard stops refusing.
 | **Provisioned** | 1496 GiB of 1752 GiB — **~256 GiB unprovisioned reserve, no overcommit** |
 | **GB per million ledgers** | **NOT YET MEASURED** — `make measure NODE=xah-node-1` |
 | **Public endpoint** | **LIVE** — `https://cluster.cbotlabs.xyz` (RPC) · `wss://ws-cluster.cbotlabs.xyz` (WS) |
-| **Public path** | Cloudflare Tunnel `onexah` → **direct to xah-node-2**. NPM is not in the path. |
+| **Public path** | Cloudflare Tunnel `onexah` → nginx rate limiter → xah-node-2. NPM is not in the path. |
+| **Rate limit** | **LIVE** — 15 req/s + burst 30 per client, 8 WS connections. Verified: 178 req/s in → 43 served, 157 × 429. |
 | **WAN IP static?** | **MOOT** — a tunnel dials out; the WAN IP is never published |
 | **Upload bandwidth** | **UNKNOWN — still the open question before going public** |
 
