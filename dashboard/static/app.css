@@ -136,10 +136,15 @@ main > section + section { margin-top: var(--s6); }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tile__value {
-  font: 650 26px/1.1 var(--font);
+  /* A ledger sequence is 8 digits plus separators. At 390px the two-up tile is
+     ~140px wide, so a fixed 26px forced it to break mid-number ("25,767,8 / 32")
+     — which reads as two wrong numbers rather than one right one. Scale the
+     value to the tile instead of wrapping it. */
+  font: 650 clamp(19px, 5.6vw, 26px)/1.1 var(--font);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.5px;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 .tile__unit { font-size: 14px; font-weight: 500; color: var(--text-dim); margin-left: 3px; }
 .tile__note { margin-top: var(--s2); font-size: 13px; color: var(--text-dim); }

@@ -146,8 +146,18 @@ allows "monitoring.node is not the Proxmox host" bash -c '
 
 printf '\n── host-side scripts refuse to run off-host ────────────────────\n'
 if [ "$(hostname -s)" != "$("$INV" get cluster.host.name)" ]; then
-  refuses "01-space-check.sh off-host"  "$REPO_ROOT/provision/01-space-check.sh"
-  refuses "05-host-prep.sh off-host"    "$REPO_ROOT/provision/05-host-prep.sh"
+  # Assert the script EXISTS first. A refuses() on a missing path passes for the
+  # wrong reason — "command not found" is also a non-zero exit — so a renamed or
+  # deleted script would silently turn this into a test of nothing.
+  for s in provision/01-space-check.sh provision/05-host-check.sh \
+           provision/10-create-vm.sh provision/11-attach-db-disk.sh; do
+    if [ -x "$REPO_ROOT/$s" ]; then
+      refuses "$(basename "$s") off-host" "$REPO_ROOT/$s"
+    else
+      printf '  \033[31mFAIL\033[0m  %s is missing or not executable — the off-host guard is untested\n' "$s"
+      FAIL=$((FAIL+1))
+    fi
+  done
 else
   printf '  ..    skipped (running on the target host)\n'
 fi
