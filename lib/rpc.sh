@@ -76,13 +76,19 @@ server_info_local()  { rpc_local server_info; }
 server_info_public() { rpc_public "$1" server_info; }
 
 # complete_ledgers -> "LOW HIGH" (empty when the node reports none/"empty")
+# parse_complete_ledgers "LOW-HIGH" -> "LOW HIGH", or nothing.
+# Returns 0 even when there is no range. "empty" is a NORMAL state for a node
+# that is still syncing, and returning non-zero made the ERR trap in callers
+# print "unexpected failure at ...", which reads like a crash rather than a
+# node that simply has no ledgers yet. Callers test for an empty result.
 parse_complete_ledgers() {
-  local cl="$1"
+  local cl="${1:-}"
   cl="${cl##*,}"                       # last range if several
   case "$cl" in
     *-*) printf '%s %s' "${cl%%-*}" "${cl##*-}" ;;
-    *)   return 1 ;;
+    *)   : ;;
   esac
+  return 0
 }
 
 # node_pubkey NODE — the node's pubkey_node, the identity [cluster_nodes] uses.

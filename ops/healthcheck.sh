@@ -94,8 +94,15 @@ check_node() {
 
   # ── the window ───────────────────────────────────────────────────────────
   local low high window want
-  if ! read -r low high < <(parse_complete_ledgers "$cl"); then
-    alert WARN "$label: complete_ledgers='$cl' — no usable range"; bump 1; return 0
+  read -r low high < <(parse_complete_ledgers "$cl") || true
+  if [ -z "${low:-}" ] || [ -z "${high:-}" ]; then
+    if [ "$state" = full ]; then
+      alert WARN "$label: complete_ledgers='$cl' — no usable range while server_state is full"
+      bump 1
+    else
+      say "$(printf '   %-20s %s' 'window' "none yet (server_state=$state — still syncing)")"
+    fi
+    return 0
   fi
   window=$(( high - low + 1 ))
   want="$N_LEDGER_HISTORY_INITIAL"

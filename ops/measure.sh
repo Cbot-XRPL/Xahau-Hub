@@ -46,9 +46,9 @@ CL="$(rpc_field "$SI" info.complete_ledgers || echo '')"
 VALIDATED="$(rpc_field "$SI" info.validated_ledger.seq || echo '')"
 [ -n "$CL" ] || die "node reports no complete_ledgers yet"
 
-if ! read -r LOW HIGH < <(parse_complete_ledgers "$CL"); then
-  die "cannot parse complete_ledgers='$CL'"
-fi
+read -r LOW HIGH < <(parse_complete_ledgers "$CL") || true
+[ -n "${LOW:-}" ] && [ -n "${HIGH:-}" ] \
+  || die "cannot parse complete_ledgers='$CL' — the node has no usable range yet. Wait for it to finish backfilling."
 RANGE=$(( HIGH - LOW + 1 ))
 WANT="$(awk '/^\[ledger_history\]/{getline; print; exit}' "$N_XAHAUD_CFG" 2>/dev/null || echo "$N_LEDGER_HISTORY_INITIAL")"
 
