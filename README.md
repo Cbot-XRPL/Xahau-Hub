@@ -49,12 +49,17 @@ make guards      # 35 assertions. Fails the build if a guard stops refusing.
 | **Storage** | PERC H740P RAID 10, VD0 1905.5 GB · `local-lvm` thin pool, 1752 GiB |
 | **Provisioned** | 1496 GiB of 1752 GiB — **~256 GiB unprovisioned reserve, no overcommit** |
 | **GB per million ledgers** | **NOT YET MEASURED** — `make measure NODE=xah-node-1` |
-| **Upload bandwidth** | **UNKNOWN — fill this in before going public** |
-| **WAN IP static?** | **UNKNOWN — fill this in before going public** |
+| **Public path** | Cloudflare Tunnel `onexah` → NPM `192.168.1.176` → node |
+| **WAN IP static?** | **MOOT** — a tunnel dials out; the WAN IP is never published |
+| **Upload bandwidth** | **UNKNOWN — still the open question before going public** |
 
-Those last two decide whether this is a community endpoint people can put in
-app configs, or a private one that happens to be well built. Until they are
-answered, treat it as internal.
+The tunnel settles the addressing question: there is no port forward and no
+published IP, so it does not matter whether the WAN address changes. What it
+does not settle is **upload**. A public WS endpoint serving subscriptions is
+upload-heavy, and the tunnel carries that traffic over the same home
+connection. Measure it before telling anyone to put this in an app config.
+
+See `proxy/npm-notes.md` for the full path and the exact NPM/Cloudflare config.
 
 ### Node inventory
 

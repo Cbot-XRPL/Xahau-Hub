@@ -1,12 +1,156 @@
-# Public endpoint — Nginx Proxy Manager (CT 100)
+# Public endpoint — Cloudflare Tunnel → Nginx Proxy Manager
 
-The reverse proxy already exists: **Nginx Proxy Manager in CT 100 on the
-R730xd (`pve`)**, already terminating TLS.
+## The actual path a request takes
 
-> **This repo does not provision, modify or connect to CT 100.** It lives on
-> the same host as CT 200, the UNL validator, and `lib/guard.sh` refuses to
-> reach that host at all. Everything below is done **by hand in the NPM UI**.
-> These are the settings, not an automation.
+```
+client ──https──▶ Cloudflare edge          TLS terminates HERE
+                       │                    DNS: <name> = Tunnel → onexah
+                       ▼
+                  cloudflared               tunnel 058ff9ba-0a47-4c80-b117-b404dad8c438
+                       ▼
+                  NPM  192.168.1.176        proxy host per hostname
+                       ▼
+                  xah-node-2  192.168.1.111 :5007 rpc · :6006 ws
+```
+
+**There is no port forwarding and no published WAN IP.** The tunnel dials
+out. Two things follow, and both matter more than they look:
+
+1. **The "is the WAN IP static?" question is moot.** It is never published, so
+   it can change freely. That blocker is resolved.
+2. **By the time a request reaches xahaud, its source address has been
+   rewritten twice** — once by Cloudflare, once by cloudflared/NPM. xahaud
+   sees NPM. NPM sees cloudflared. Only Cloudflare ever saw the real client.
+
+> **This repo does not provision, modify or connect to NPM or the tunnel.**
+> NPM lives in CT 100 on the R730xd, the same host as the UNL validator, and
+> `lib/guard.sh` refuses that host. Everything below is done **by hand** in the
+> Cloudflare and NPM UIs. These are the settings, not an automation.
+
+---
+
+## Adding `cluster.cbotlabs.xyz`
+
+### 1. Cloudflare — a public hostname on the existing tunnel
+
+Zero Trust → Networks → Tunnels → **onexah** → Public Hostnames → Add:
+
+| field | value |
+|---|---|
+| Subdomain | `cluster` |
+| Domain | `cbotlabs.xyz` |
+| Service | `http://192.168.1.176:80` |
+
+That creates the DNS record for you. Do **not** hand-create a CNAME as well —
+the tunnel manages it, and a stale manual record is how a hostname ends up
+resolving to nothing.
+
+### 2. NPM — two proxy hosts, one per protocol
+
+XRPL/Xahau clients expect `https://host` and `wss://host`. Serving both from
+one NPM proxy host is possible but fragile: NPM generates its own `location /`,
+so a `location /` pasted into **Advanced** produces a duplicate-location error
+and takes the whole proxy down — not just that host. Two hosts cannot do that.
+
+**Host A — JSON-RPC**
+
+| field | value |
+|---|---|
+| Domain Names | `cluster.cbotlabs.xyz` |
+| Scheme | `http` |
+| Forward Hostname / IP | `192.168.1.111` ← **xah-node-2**, the api node |
+| Forward Port | `5007` |
+| Websockets Support | off |
+| Access List | Publicly Accessible |
+
+**Host B — WebSocket**
+
+| field | value |
+|---|---|
+| Domain Names | `ws.cluster.cbotlabs.xyz` |
+| Scheme | `http` |
+| Forward Hostname / IP | `192.168.1.111` |
+| Forward Port | `6006` |
+| **Websockets Support** | **ON** |
+| Access List | Publicly Accessible |
+
+Each needs its own public hostname on the tunnel (step 1, twice).
+
+On **both**, put this in **Advanced**. No `location` wrapper — these are
+server-level directives that the generated location inherits, which is what
+makes them safe to paste:
+
+```nginx
+# Preserve the ONLY address that identifies the real client. Cloudflare sets
+# CF-Connecting-IP; every hop after it is infrastructure. Setting rather than
+# appending matters — xahaud must not read cloudflared's address as the client.
+proxy_set_header X-Real-IP         $http_cf_connecting_ip;
+proxy_set_header X-Forwarded-For   $http_cf_connecting_ip;
+proxy_set_header X-Forwarded-Proto https;
+
+# A subscribe is a long-lived idle connection. Without this it is dropped at
+# 60s and clients see phantom disconnects they cannot explain. Harmless on the
+# RPC host.
+proxy_read_timeout 3600s;
+proxy_send_timeout 3600s;
+```
+
+Do **not** add `proxy_set_header Connection $connection_upgrade`. That variable
+comes from an http-level `map` that NPM does not always define, and an
+undefined variable there fails the config reload. NPM's "Websockets Support"
+toggle already sets the upgrade headers correctly — use it instead of
+hand-writing them.
+
+#### If you really want one hostname for both
+
+Use the **Custom locations** tab rather than Advanced, so NPM generates the
+location block instead of you duplicating it. It is still more moving parts
+than two hostnames, for a cosmetic gain. Two hostnames is the recommendation.
+
+### 3. Point `secure_gateway` at NPM — already done
+
+`inventory.yml` sets `cluster.proxy.address: 192.168.1.176`, rendered into both
+public port stanzas. That is what makes xahaud read the forwarded address
+rather than accounting every request against NPM.
+
+The chain only works end to end if **every** hop preserves it, which is why
+the nginx block above sets `X-Forwarded-For` from `CF-Connecting-IP` rather
+than appending to whatever arrived.
+
+---
+
+## Rate limiting belongs at Cloudflare
+
+Measured on this cluster: **60 rapid JSON-RPC requests from one address all
+returned 200, with `load_factor` pinned at 1.** xahaud does not rate limit a
+public endpoint at any rate a real client would produce. Do not rely on it.
+
+NPM can limit too, but behind a tunnel it is working from a header rather than
+a socket address. Cloudflare is the only hop that sees the client directly.
+
+Cloudflare → Security → WAF → Rate limiting rules:
+
+| rule | expression | action |
+|---|---|---|
+| RPC flood | `http.host eq "cluster.cbotlabs.xyz"` | 20 req / 10s per IP → block 60s |
+| WS churn | same host, `http.request.headers["upgrade"][0] eq "websocket"` | 10 req / 60s per IP |
+
+Then in xahaud, `[cluster_nodes]` shares abuse accounting between the nodes, so
+a client cannot hop backends to reset its budget — but only once
+`secure_gateway` is in place, or every client looks like one client and there
+is nothing to share.
+
+### Two Cloudflare behaviours to know before going public
+
+- **The ~100s proxy timeout applies to HTTP, not WebSockets.** A deep
+  historical `account_tx` can exceed it and return a 524 while the node is
+  still working perfectly. That is one more reason deep queries get their own
+  hostname pointed at node 1, rather than sharing this one.
+- **Caching does not apply to POST**, which is all JSON-RPC is. Nothing to
+  configure, but do not add a cache rule "to be safe" — a cached ledger
+  response is a wrong answer served fast.
+
+---
 
 ---
 

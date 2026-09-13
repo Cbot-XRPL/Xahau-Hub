@@ -96,6 +96,21 @@ cluster:
     kind: nginx-proxy-manager
     location: "CT 100 on pve (R730xd) — DO NOT MODIFY THE CONTAINER FROM HERE"
     admin_url: "https://192.168.1.176:81"
+
+    # ── public path: Cloudflare Tunnel, not port forwarding ──────────────────
+    #  client -> Cloudflare edge (TLS ends here) -> cloudflared (tunnel
+    #  "onexah") -> NPM 192.168.1.176 -> node.
+    #
+    #  Consequence worth writing down: the WAN IP is never published and never
+    #  needs to be static, so the README's "is the WAN IP static?" blocker does
+    #  not apply. Nothing is exposed by forwarding a router port.
+    #
+    #  Second consequence, less obvious: by the time a request reaches xahaud
+    #  its source address has been rewritten twice. Rate limiting belongs at
+    #  the Cloudflare edge, where the client address is unambiguous.
+    public_via: cloudflare-tunnel
+    tunnel_name: onexah
+    public_hostname: cluster.cbotlabs.xyz
     tls: terminated-at-proxy
     proxied_ports: [6006, 5007]
 
