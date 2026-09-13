@@ -210,6 +210,59 @@ echo "svc_active=$(systemctl is-active "$SVC" 2>/dev/null || true)"
 echo "svc_enabled=$(systemctl is-enabled "$SVC" 2>/dev/null || true)"
 echo "crons=$(ls /etc/cron.d/xahau-hub >/dev/null 2>&1 && echo 1 || echo 0)"
 echo "rpc_b64=$(curl -fsS --max-time 8 -H 'content-type: application/json' --data '{"method":"server_info","params":[{}]}' "http://127.0.0.1:${RPCPORT}/" 2>/dev/null | base64 -w0)"
+
+# ── the public API surface, exercised over the LAN address ────────────────────
+#  Deliberately NOT 127.0.0.1: a method can work perfectly on loopback while the
+#  public bind is wrong, firewalled, or listening on the wrong interface. This
+#  is the path a real client takes.
+ADDR=%(addr)s
+PUBRPC=%(pubrpc)s
+PUBWS=%(pubws)s
+
+api_call() {
+  _m="$1"; _p="$2"
+  _body=$(curl -fsS --max-time 5 -H 'content-type: application/json' \
+            --data "{\"method\":\"$_m\",\"params\":[$_p]}" \
+            "http://${ADDR}:${PUBRPC}/" 2>/dev/null)
+  if [ -z "$_body" ]; then echo "api_${_m}=unreachable"; return; fi
+  printf '%%s' "$_body" | python3 -c '
+import json,sys
+try: r=json.load(sys.stdin).get("result",{})
+except Exception: print("badjson"); raise SystemExit
+print(r.get("error") or r.get("status") or "unknown")' 2>/dev/null \
+    | sed "s/^/api_${_m}=/" || echo "api_${_m}=badjson"
+}
+
+api_call server_info '{}'
+api_call fee '{}'
+api_call ledger_current '{}'
+api_call ledger '{"ledger_index":"validated"}'
+api_call account_info '{"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","ledger_index":"validated"}'
+api_call account_tx '{"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","ledger_index_min":-1,"ledger_index_max":-1,"limit":1}'
+
+# An admin method on the public port must be refused. 403 is correct; a 200
+# here means the admin surface is exposed and is the single worst outcome.
+# NB: capture then default. `curl ... || echo 000` appends on a non-zero exit
+# instead of replacing, and curl exits non-zero for a 101 it cannot complete —
+# which silently produced a code of "101000".
+_c=$(curl -so /dev/null -w '%%{http_code}' --max-time 5 \
+  -H 'content-type: application/json' --data '{"method":"can_delete","params":[{}]}' \
+  "http://${ADDR}:${PUBRPC}/" 2>/dev/null); echo "api_admin_refused_code=${_c:-000}"
+
+# The admin port must not answer on the LAN address at all.
+if curl -so /dev/null --max-time 4 "http://${ADDR}:${RPCPORT}/" 2>/dev/null; then
+  echo "api_admin_port_lan=REACHABLE"
+else
+  echo "api_admin_port_lan=refused"
+fi
+
+# WebSocket upgrade. 101 or it is not a working WS endpoint.
+_w=$(curl -so /dev/null -w '%%{http_code}' --max-time 5 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Key: ZGFzaGJvYXJkcHJvYmUxMg==' -H 'Sec-WebSocket-Version: 13' \
+  "http://${ADDR}:${PUBWS}/" 2>/dev/null); echo "api_ws_code=${_w:-000}"
+
+echo "api_secure_gateway=$(grep -c '^secure_gateway' "$CFG" 2>/dev/null || echo 0)"
 """
 
 
@@ -277,6 +330,9 @@ class Collector:
             "svc": shlex.quote(dflt["xahaud_service"]),
             "label": shlex.quote(dflt["db_label"]),
             "rpc": shlex.quote(str(c["ports"]["rpc_admin"])),
+            "addr": shlex.quote(str(n["address"])),
+            "pubrpc": shlex.quote(str(c["ports"]["rpc_public"])),
+            "pubws": shlex.quote(str(c["ports"]["ws_public"])),
         }
         rc, out = self.probe(n, probe)
         node["reachable"] = rc == 0
@@ -391,6 +447,59 @@ class Collector:
                 "amendment_blocked": info.get("amendment_blocked", False),
             }
             node["done"]["synced"] = (info.get("server_state") or "") in SYNCED_STATES
+
+        # ── public API surface ───────────────────────────────────────────────
+        #  Each method is reported as it answered over the LAN address. "error"
+        #  values are kept verbatim rather than flattened to a boolean: a node
+        #  that is up but whose window does not cover a request answers
+        #  differently from one that is down, and the difference is the point.
+        METHODS = ["server_info", "fee", "ledger_current", "ledger",
+                   "account_info", "account_tx"]
+        methods = {}
+        for m in METHODS:
+            v = d.get("api_" + m)
+            methods[m] = v or "unreachable"
+        admin_code = d.get("api_admin_refused_code") or "000"
+        ws_code = d.get("api_ws_code") or "000"
+        admin_lan = d.get("api_admin_port_lan") or "unknown"
+        sg = as_int(d, "api_secure_gateway", 0) or 0
+
+        api = {
+            "rpc_port": c["ports"]["rpc_public"],
+            "ws_port": c["ports"]["ws_public"],
+            "methods": methods,
+            "ok_count": sum(1 for v in methods.values() if v == "success"),
+            "total": len(METHODS),
+            "ws_code": ws_code,
+            "ws_ok": ws_code == "101",
+            "admin_refused_code": admin_code,
+            "admin_refused": admin_code in ("403", "401"),
+            "admin_port_lan": admin_lan,
+            "admin_port_sealed": admin_lan == "refused",
+            "secure_gateway": sg > 0,
+            "proxy_address": (c.get("proxy") or {}).get("address"),
+        }
+        api["healthy"] = (
+            api["ok_count"] == api["total"]
+            and api["ws_ok"]
+            and api["admin_refused"]
+            and api["admin_port_sealed"]
+        )
+        node["api"] = api
+
+        # These two are security failures, not degradations. Say so loudly.
+        if not api["admin_port_sealed"] and admin_lan != "unknown":
+            node["errors"].append(
+                "ADMIN PORT %s ANSWERS ON %s — it must bind 127.0.0.1 only and must never be proxied"
+                % (c["ports"]["rpc_admin"], node["address"]))
+        if admin_code not in ("403", "401", "000"):
+            node["errors"].append(
+                "an admin method returned HTTP %s on the PUBLIC port — the admin surface is exposed"
+                % admin_code)
+        if not api["secure_gateway"] and node.get("public"):
+            node["errors"].append(
+                "no secure_gateway in the config — behind the proxy every client is accounted as "
+                "one, so rate limiting and abuse accounting do nothing")
             if node["ledger"]["amendment_blocked"]:
                 node["errors"].append("AMENDMENT BLOCKED — this node cannot follow the network")
             if node["ledger"]["network_id"] not in (None, c["network_id"]):

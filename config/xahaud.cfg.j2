@@ -32,15 +32,24 @@ port = {{ port_peer }}
 ip = 0.0.0.0
 protocol = peer
 
+# secure_gateway = the reverse proxy. xahaud then trusts X-Forwarded-For from
+# that address and rate-limits the REAL client rather than the proxy. Without
+# it every request wears the proxy's IP and per-client accounting is useless.
+# It grants no admin — and must never be added to port_rpc_admin_local.
 [port_ws_public]
 port = {{ port_ws_public }}
 ip = 0.0.0.0
 protocol = ws
+secure_gateway = {{ proxy_address }}
+limit = {{ ws_limit }}
+send_queue_limit = {{ ws_send_queue_limit }}
+websocket_ping_frequency = {{ ws_ping_frequency }}
 
 [port_rpc_public]
 port = {{ port_rpc_public }}
 ip = 0.0.0.0
 protocol = http
+secure_gateway = {{ proxy_address }}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Storage

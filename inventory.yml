@@ -95,8 +95,25 @@ cluster:
   proxy:
     kind: nginx-proxy-manager
     location: "CT 100 on pve (R730xd) — DO NOT MODIFY THE CONTAINER FROM HERE"
+    admin_url: "https://192.168.1.176:81"
     tls: terminated-at-proxy
     proxied_ports: [6006, 5007]
+
+    # ── secure_gateway ───────────────────────────────────────────────────────
+    #  The proxy's own address, rendered into the PUBLIC port stanzas so
+    #  xahaud trusts X-Forwarded-For from it and accounts resources against
+    #  the REAL client.
+    #
+    #  Without this, every request arrives wearing the proxy's IP. xahaud's
+    #  per-client accounting collapses into a single bucket: one abuser
+    #  degrades every user at once, and the shared client-abuse accounting
+    #  that [cluster_nodes] buys us does nothing, because there is only ever
+    #  one apparent client.
+    #
+    #  It is NOT admin. secure_gateway only makes the forwarded identity
+    #  trusted; it grants no privileged methods. It must never appear on
+    #  port_rpc_admin_local.
+    address: 192.168.1.176
 
   # ── Monitoring dashboard (dashboard/). READ ONLY, LAN only. ───────────────
   #  Runs as a systemd unit INSIDE a node VM and answers GET on that node's
@@ -170,6 +187,13 @@ cluster:
     # there is exactly ONE config, whichever path is used to reach it.
     xahaud_installer_cfg: /opt/xahaud/etc/xahaud.cfg
     ops_dir: /opt/xahau-hub
+
+    # WebSocket hardening, from Xahau's own shipped defaults. A subscribe is a
+    # long-lived connection; without a send-queue bound one slow consumer can
+    # make the server buffer without limit on its behalf.
+    ws_limit: 50000
+    ws_send_queue_limit: 20000
+    ws_ping_frequency: 10
     db_mount: /var/lib/xahaud
     db_label: xahdb
     db_fs: xfs

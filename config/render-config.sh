@@ -178,6 +178,10 @@ for x in (v if isinstance(v,list) else [v]):
     "port_peer=$N_PEER" \
     "port_ws_public=$N_WS_PUBLIC" \
     "port_rpc_public=$N_RPC_PUBLIC" \
+    "proxy_address=$("$INV" get cluster.proxy.address)" \
+    "ws_limit=$N_WS_LIMIT" \
+    "ws_send_queue_limit=$N_WS_SEND_QUEUE_LIMIT" \
+    "ws_ping_frequency=$N_WS_PING_FREQUENCY" \
     "db_mount=$N_DB_MOUNT" \
     "db_label=$N_DB_LABEL" \
     "online_delete=$N_ONLINE_DELETE" \
@@ -209,6 +213,10 @@ for x in (v if isinstance(v,list) else [v]):
   grep -qE '^\s*admin = 127\.0\.0\.1\s*$' "$tmp"   || die "$node: admin is not pinned to 127.0.0.1 — refusing"
   awk '/^\[port_rpc_admin_local\]/{f=1;next} /^\[/{f=0} f && /ip *= *0\.0\.0\.0/{exit 1}' "$tmp" \
     || die "$node: admin RPC is bound to 0.0.0.0 — refusing. Admin must never leave localhost."
+  awk '/^\[port_rpc_admin_local\]/{f=1;next} /^\[/{f=0} f && /secure_gateway/{exit 1}' "$tmp" \
+    || die "$node: secure_gateway appears on the ADMIN stanza. It marks a forwarded identity as trusted and has no business on an admin port. Refusing."
+  grep -q "^secure_gateway = $("$INV" get cluster.proxy.address)$" "$tmp" \
+    || die "$node: secure_gateway did not render on the public ports — clients behind the proxy would all be accounted as one."
   grep -qE '^use_tx_tables|^\[use_tx_tables\]' "$tmp" || die "$node: [use_tx_tables] missing"
   grep -q "^online_delete=$N_ONLINE_DELETE$" "$tmp" || die "$node: online_delete did not render"
   grep -q "^advisory_delete=1$" "$tmp"              || die "$node: advisory_delete must be 1 (prune-guard.sh drives pruning)"

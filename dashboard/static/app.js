@@ -196,6 +196,45 @@ function nodeCard(n) {
       ['xahaud uptime', dur(L.uptime_s)],
       ['Build', L.build_version || '—'],
     ]));
+  }
+
+  // ── public API surface ─────────────────────────────────────────────────────
+  //  Probed over the node's LAN address, not loopback: a method can answer
+  //  perfectly on 127.0.0.1 while the public bind is wrong or firewalled, and
+  //  that difference is exactly what a public endpoint gets wrong.
+  const A = n.api;
+  if (A) {
+    const rows = Object.entries(A.methods || {}).map(([m, v]) => {
+      const ok = v === 'success';
+      return [m, ok ? 'success' : v, ok ? 'ok' : (v === 'unreachable' ? 'crit' : 'warn')];
+    });
+    rows.push(['WebSocket upgrade',
+      A.ws_ok ? '101 Switching Protocols' : `HTTP ${A.ws_code}`,
+      A.ws_ok ? 'ok' : 'crit']);
+
+    // These two are security properties, not health metrics.
+    rows.push(['Admin method on public port',
+      A.admin_refused ? `refused (${A.admin_refused_code})` : `HTTP ${A.admin_refused_code} — EXPOSED`,
+      A.admin_refused ? 'ok' : 'crit']);
+    rows.push(['Admin port on LAN address',
+      A.admin_port_sealed ? 'refused' : `${A.admin_port_lan} — EXPOSED`,
+      A.admin_port_sealed ? 'ok' : 'crit']);
+
+    // Without secure_gateway every client behind the proxy is accounted as
+    // one, so rate limiting and abuse accounting silently do nothing.
+    rows.push(['secure_gateway',
+      A.secure_gateway ? (A.proxy_address || 'set') : 'NOT SET',
+      A.secure_gateway ? 'ok' : 'warn']);
+
+    // Reuse the existing meter head idiom rather than inventing classes —
+    // .block/.chip--ok were not in app.css and would have rendered unstyled.
+    const headTone = A.healthy ? 'ok' : 'warn';
+    body.push(h('div', { class: 'meter', 'data-tone': headTone },
+      h('div', { class: 'meter__head' },
+        h('span', { class: 'meter__label', text: 'Public API' }),
+        h('span', { class: 'meter__value',
+          text: `${A.ok_count}/${A.total} · rpc ${A.rpc_port} · ws ${A.ws_port}` }))));
+    body.push(kvRows(rows));
   } else if (n.reachable) {
     body.push(kvRows([
       ['Guest OS', n.os || '—'],

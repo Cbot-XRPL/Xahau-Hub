@@ -144,6 +144,20 @@ allows "monitoring.node is not the Proxmox host" bash -c '
   h=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.host.name)
   [ -n "$n" ] && [ "$n" != "$h" ]'
 
+printf '\n── secure_gateway hygiene ──────────────────────────────────────\n'
+"$XAH_REPO_ROOT/config/render-config.sh" xah-node-1 --no-seed --out /tmp/sgrender >/dev/null 2>&1
+if [ -f /tmp/sgrender/xahaud.cfg ]; then
+  allows  "secure_gateway on the public RPC port" bash -c '
+    awk "/^\\[port_rpc_public\\]/{f=1;next} /^\\[/{f=0} f && /secure_gateway/{found=1} END{exit !found}" /tmp/sgrender/xahaud.cfg'
+  allows  "secure_gateway on the public WS port" bash -c '
+    awk "/^\\[port_ws_public\\]/{f=1;next} /^\\[/{f=0} f && /secure_gateway/{found=1} END{exit !found}" /tmp/sgrender/xahaud.cfg'
+  refuses "secure_gateway on the ADMIN port" bash -c '
+    awk "/^\\[port_rpc_admin_local\\]/{f=1;next} /^\\[/{f=0} f && /secure_gateway/{found=1} END{exit !found}" /tmp/sgrender/xahaud.cfg'
+  refuses "admin directive on any public port" bash -c '
+    awk "/^\\[port_(ws|rpc)_public\\]/{f=1;next} /^\\[/{f=0} f && /^admin *=/{found=1} END{exit !found}" /tmp/sgrender/xahaud.cfg'
+fi
+rm -rf /tmp/sgrender
+
 printf '\n── host-side scripts refuse to run off-host ────────────────────\n'
 if [ "$(hostname -s)" != "$("$INV" get cluster.host.name)" ]; then
   # Assert the script EXISTS first. A refuses() on a missing path passes for the
