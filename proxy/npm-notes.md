@@ -31,26 +31,23 @@ out. Two things follow, and both matter more than they look:
 
 ## Adding `cluster.cbotlabs.xyz`
 
-### 1. Cloudflare — a public hostname on the existing tunnel
+The tunnel is **file-managed, not dashboard-managed**. It lives in the private
+repo `Cbot-XRPL/cloudflare-tunnel`, cloned on the NPM host, and `hosts.txt` is
+the source of truth. `tunnel-host.sh` regenerates `config.yml`, creates the DNS
+route and restarts cloudflared in one step.
 
-Zero Trust → Networks → Tunnels → **onexah** → Public Hostnames → Add:
+> Do **not** add CNAMEs by hand in the Cloudflare DNS UI. `tunnel-host.sh apply`
+> runs `cloudflared tunnel route dns --overwrite-dns` for every host in
+> `hosts.txt`. A hand-made record is either redundant or silently fighting it.
 
-| field | value |
-|---|---|
-| Subdomain | `cluster` |
-| Domain | `cbotlabs.xyz` |
-| Service | `http://192.168.1.176:80` |
+### 1. NPM first — two proxy hosts
 
-That creates the DNS record for you. Do **not** hand-create a CNAME as well —
-the tunnel manages it, and a stale manual record is how a hostname ends up
-resolving to nothing.
+Do this **before** routing the hostname, so the tunnel never delivers a request
+NPM does not yet recognise.
 
-### 2. NPM — two proxy hosts, one per protocol
-
-XRPL/Xahau clients expect `https://host` and `wss://host`. Serving both from
-one NPM proxy host is possible but fragile: NPM generates its own `location /`,
-so a `location /` pasted into **Advanced** produces a duplicate-location error
-and takes the whole proxy down — not just that host. Two hosts cannot do that.
+Every tunnel host arrives at NPM as `https://localhost:443` with SNI and Host
+set to the public name, so NPM fans out by Host exactly as it does for every
+other site. Internal IPs live **only** in NPM, never in the tunnel config.
 
 **Host A — JSON-RPC**
 
@@ -70,42 +67,47 @@ and takes the whole proxy down — not just that host. Two hosts cannot do that.
 | Domain Names | `ws.cluster.cbotlabs.xyz` |
 | Scheme | `http` |
 | Forward Hostname / IP | `192.168.1.111` |
-| Forward Port | `6006` |
+| Forward Port | **`6006`** |
 | **Websockets Support** | **ON** |
 | Access List | Publicly Accessible |
 
-Each needs its own public hostname on the tunnel (step 1, twice).
+Two hosts rather than one, because NPM generates its own `location /` — a
+`location` block pasted into **Advanced** is a duplicate-location error that
+fails the reload and takes down *every* proxy host, not just the new one.
 
-On **both**, put this in **Advanced**. No `location` wrapper — these are
-server-level directives that the generated location inherits, which is what
-makes them safe to paste:
+### 2. Then route them — on the NPM host
+
+```bash
+cd ~/cloudflare-tunnel          # wherever the repo is cloned
+bash tunnel-host.sh add cluster.cbotlabs.xyz
+bash tunnel-host.sh add ws.cluster.cbotlabs.xyz
+bash tunnel-host.sh list        # confirm
+```
+
+`add` appends to `hosts.txt` and auto-applies: regenerates `config.yml` with
+`noTLSVerify: true` and `originServerName: <host>`, creates each DNS route, and
+restarts cloudflared.
+
+### Optional hardening, on both NPM hosts (Advanced box)
+
+Server-level directives only — no `location` wrapper:
 
 ```nginx
-# Preserve the ONLY address that identifies the real client. Cloudflare sets
-# CF-Connecting-IP; every hop after it is infrastructure. Setting rather than
-# appending matters — xahaud must not read cloudflared's address as the client.
+# Cloudflare is the only hop that saw the real client. Set, do not append:
+# otherwise xahaud faithfully rate-limits cloudflared.
 proxy_set_header X-Real-IP         $http_cf_connecting_ip;
 proxy_set_header X-Forwarded-For   $http_cf_connecting_ip;
 proxy_set_header X-Forwarded-Proto https;
 
-# A subscribe is a long-lived idle connection. Without this it is dropped at
-# 60s and clients see phantom disconnects they cannot explain. Harmless on the
-# RPC host.
+# A subscribe is long-lived and idle; without this it dies at 60s and clients
+# see disconnects they cannot explain. Harmless on the RPC host.
 proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
-Do **not** add `proxy_set_header Connection $connection_upgrade`. That variable
-comes from an http-level `map` that NPM does not always define, and an
-undefined variable there fails the config reload. NPM's "Websockets Support"
-toggle already sets the upgrade headers correctly — use it instead of
-hand-writing them.
-
-#### If you really want one hostname for both
-
-Use the **Custom locations** tab rather than Advanced, so NPM generates the
-location block instead of you duplicating it. It is still more moving parts
-than two hostnames, for a cosmetic gain. Two hostnames is the recommendation.
+Do **not** add `proxy_set_header Connection $connection_upgrade` — that comes
+from an http-level `map` NPM does not always define, and an undefined variable
+there fails the reload. NPM's Websockets Support toggle already sets it.
 
 ### 3. Point `secure_gateway` at NPM — already done
 

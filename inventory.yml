@@ -108,9 +108,17 @@ cluster:
     #  Second consequence, less obvious: by the time a request reaches xahaud
     #  its source address has been rewritten twice. Rate limiting belongs at
     #  the Cloudflare edge, where the client address is unambiguous.
+    #  The tunnel is FILE-MANAGED, not dashboard-managed: the private repo
+    #  Cbot-XRPL/cloudflare-tunnel is cloned on the NPM host, hosts.txt is the
+    #  source of truth, and `tunnel-host.sh add <host>` regenerates config.yml,
+    #  creates the DNS route and restarts cloudflared in one step. Do not add
+    #  CNAMEs by hand — apply runs `route dns --overwrite-dns` over every host.
     public_via: cloudflare-tunnel
     tunnel_name: onexah
-    public_hostname: cluster.cbotlabs.xyz
+    tunnel_repo: "Cbot-XRPL/cloudflare-tunnel"
+    tunnel_origin: "https://localhost:443"   # cloudflared is co-located with NPM
+    public_hostname_rpc: cluster.cbotlabs.xyz
+    public_hostname_ws: ws.cluster.cbotlabs.xyz
     tls: terminated-at-proxy
     proxied_ports: [6006, 5007]
 
