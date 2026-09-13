@@ -117,8 +117,14 @@ cluster:
     tunnel_name: onexah
     tunnel_repo: "Cbot-XRPL/cloudflare-tunnel"
     tunnel_origin: "https://localhost:443"   # cloudflared is co-located with NPM
+    #  BOTH names must be exactly ONE label deep. Cloudflare Universal SSL
+    #  issues a cert for `cbotlabs.xyz, *.cbotlabs.xyz` and nothing more, so
+    #  a two-level name like ws.cluster.cbotlabs.xyz has no edge certificate
+    #  and dies at the TLS handshake before it reaches the tunnel at all.
+    #  Verified from the edge cert's SAN list on 2026-09-13. Multi-level
+    #  wildcards need Advanced Certificate Manager (paid).
     public_hostname_rpc: cluster.cbotlabs.xyz
-    public_hostname_ws: ws.cluster.cbotlabs.xyz
+    public_hostname_ws: ws-cluster.cbotlabs.xyz
     tls: terminated-at-proxy
     proxied_ports: [6006, 5007]
 

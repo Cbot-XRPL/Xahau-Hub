@@ -121,6 +121,72 @@ than appending to whatever arrived.
 
 ---
 
+## Two failures that cost real time here
+
+### 1. Hostnames must be ONE label deep
+
+Cloudflare **Universal SSL** issues exactly:
+
+```
+X509v3 Subject Alternative Name:
+    DNS:cbotlabs.xyz, DNS:*.cbotlabs.xyz
+```
+
+One wildcard level. `ws.cluster.cbotlabs.xyz` is two, so the edge has no
+certificate for it and the connection dies at the TLS handshake:
+
+```
+TLSv1.3 (IN), TLS alert, handshake failure (552)
+curl: (35) TLS connect error
+```
+
+It never reaches the tunnel, so nothing in cloudflared, NPM or xahaud can be
+at fault and nothing in their logs shows anything. Use `ws-cluster.<zone>`,
+not `ws.cluster.<zone>`. Multi-level wildcards require Advanced Certificate
+Manager, which is paid.
+
+### 2. `cloudflared tunnel route dns` only works for the cert's own zone
+
+`~/.cloudflared/cert.pem` is scoped to the single zone chosen during
+`cloudflared tunnel login` — here, **onexah.io**. `route dns` treats the
+hostname as *relative to that zone*, so:
+
+```
+$ cloudflared tunnel route dns --overwrite-dns onexah cluster.cbotlabs.xyz
+INF cluster.cbotlabs.xyz.onexah.io is already configured to route to your tunnel
+```
+
+It created `cluster.cbotlabs.xyz.onexah.io` — a real record, in the wrong
+zone, and **exited 0**. `tunnel-host.sh` pipes that to `/dev/null` and prints
+`DNS → tunnel: <host>`, so every host reads as routed. Confirmed junk records
+now in the onexah.io zone:
+
+```
+cluster.cbotlabs.xyz.onexah.io       ws.cluster.cbotlabs.xyz.onexah.io
+xahauval.cbotlabs.xyz.onexah.io      webserver.cbotlabs.xyz.onexah.io
+cbotlabs.xyz.onexah.io               xahauvault.com.onexah.io
+odinseyes.io.onexah.io               newterraconstruction.com.onexah.io
+```
+
+**Consequence:** for any zone other than the cert's, create the CNAME by hand:
+
+| Type | Name | Target | Proxy |
+|---|---|---|---|
+| CNAME | `cluster` | `<TUNNEL_ID>.cfargotunnel.com` | Proxied |
+
+(That is exactly how the working hostnames were already set up — which is why
+they work and the "automated" ones never did.)
+
+### 3. NPM needs a cert or the hostname does not exist to it
+
+Symptom: the request arrives and you get the **"Default Page of NPMplus"** —
+`GET` returns 200, `POST` returns 405. That is not the backend. It means SNI
+matched no server block and fell through to the default.
+
+NPMplus only builds an SSL server block for a hostname once it has a
+certificate. Requesting one while DNS is still NXDOMAIN fails, leaving the
+proxy host listed but unserved. **Order matters: DNS first, then the cert.**
+
 ## Rate limiting belongs at Cloudflare
 
 Measured on this cluster: **60 rapid JSON-RPC requests from one address all
