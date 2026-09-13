@@ -26,19 +26,29 @@ looking, not for keeping things alive.
 
 ## 1. Phase 1 build, in order
 
-### 1.1 Prepare the host — before any node exists
+### 1.1 Preflight the host — before any node exists
 
 ```bash
-make check                       # inventory math + 35 guard assertions
-ssh root@192.168.1.120           # pve2
-cd /path/to/repo && make host-prep
+make check                       # inventory math + guard assertions
+make host-check                  # READ-ONLY preflight on pve2
 make space                       # no-overcommit check against live lvs
 ```
 
-`host-prep` sets `thin_pool_autoextend_threshold`, installs the ops tooling to
-`/opt/xahau-hub`, and stands up the growth-watch cron. The monitoring goes up
-**first** — it is the safety net for running a growing database on the same
-array as everything else.
+Run these from your workstation. You do **not** ssh to pve2 and you do not
+install anything there: `ops/host-run.sh` stages this repo into a temp dir on
+the host, runs the one command, and deletes it — success or failure. Every
+`make` target that needs the hypervisor goes through it.
+
+`host-check` only reports. It tells you whether `thin_pool_autoextend_*`
+matches `inventory.yml` and prints the edit to make by hand if you want it,
+because that setting is host-global and affects every guest on pve2, not just
+this cluster's nodes. It also fails if it finds leftover `xahau-hub` residue on
+the host.
+
+The monitoring is the safety net for running a growing database on a shared
+array — but it lives in the **guests**. `20-guest-bootstrap.sh` installs the
+growth/prune/health crons inside each node, and the dashboard runs there too
+(§1.6).
 
 ### 1.2 Create node 1
 

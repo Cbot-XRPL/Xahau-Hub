@@ -88,7 +88,7 @@ make check                   # inventory math, no-overcommit, 35 guard assertion
 Phase 1 build, in order — full detail in `docs/RUNBOOK.md`:
 
 ```bash
-make host-prep                          # ON pve2. Monitoring BEFORE the first node.
+make host-check                         # READ-ONLY preflight on pve2. Changes nothing.
 make create-vm  NODE=xah-node-1         # root disk only — installer must not see the DB disk
 #   ... install Ubuntu 24.04 ...
 make attach-db  NODE=xah-node-1         # hot-add the 700 GiB DB disk
@@ -116,7 +116,7 @@ inventory.yml           ← nodes, sizes, ports, thresholds, guard list, NVMe pl
 ├── provision/
 │   ├── 00-nvme-setup.sh        host, phase 1.5: pvcreate/vgcreate/lvcreate
 │   ├── 01-space-check.sh       host: no-overcommit gate, run this first
-│   ├── 05-host-prep.sh         host: lvm.conf autoextend + growth-watch cron
+│   ├── 05-host-check.sh        host: READ-ONLY preflight — reports, never writes
 │   ├── 10-create-vm.sh         host: qm create, ROOT DISK ONLY
 │   ├── 11-attach-db-disk.sh    host: hot-add the DB disk AFTER the OS install
 │   └── 20-guest-bootstrap.sh   guest: deps, XFS, user, xahaud, systemd, crons
@@ -137,9 +137,10 @@ inventory.yml           ← nodes, sizes, ports, thresholds, guard list, NVMe pl
 │   ├── gen-seed.sh             validation_create, uniqueness enforced
 │   ├── migrate-to-nvme.sh      phase 1.5, one node at a time
 │   ├── remote.sh               run any of these ON a node, through the guards
+│   ├── host-run.sh             stage on pve2 for ONE command, then delete it
 │   └── backup-config.sh        configs + seed MANIFEST (never the seeds)
 ├── dashboard/
-│   ├── xah-dashboard.py        read-only monitor, stdlib only, systemd on the host
+│   ├── xah-dashboard.py        read-only monitor, stdlib only, systemd IN a node
 │   ├── install.sh              push + unit + start + /healthz gate
 │   └── static/                 one page, no build step, no CDN, no webfonts
 ├── lib/                        inventory parser, renderer, guards, rpc, logging
@@ -161,42 +162,63 @@ nothing needs installing on a Proxmox host or a fresh Ubuntu guest.
 ## Monitoring dashboard
 
 ```sh
-make dashboard          # install or restart it on the host
+make dashboard          # install or restart it inside its node
 make dashboard-status   # is it up, and where
 ```
 
-Then open **http://192.168.1.120:8088/** on the LAN.
+Then open **http://192.168.1.110:8088/** on the LAN.
 
-One page, refreshed every 20s by a collector thread on the host: overview
-tiles, a card per node, a card for the host and its thin pool. While the
-cluster is still being built it doubles as the build tracker — each node shows
-where it is in the nine provisioning stages, from `VM created` through
+It runs **inside a node VM**, never on the Proxmox host. pve2 also runs guests
+this repo does not own, so nothing of ours is resident there: no packages, no
+systemd unit, no cron, no open port, no copy of this repo. The collector
+enforces it too — it refuses to start if it detects `/etc/pve` or `qm`.
+
+One page, refreshed every 20s by a collector thread: overview tiles and a card
+per node. Each instance reads **its own node locally** and any peer **over
+guarded ssh**, so a card means the same thing either way. While the cluster is
+still being built it doubles as the build tracker — each node shows where it is
+in the seven provisioning stages, from `Guest reachable` through
 `Synced to network`, so the answer to "is node 2 up yet" is a glance rather
 than four ssh sessions.
 
-It is **read only by construction**, and that is the point of putting a web
-server on a hypervisor at all:
+Install one instance per node and each can tell you the other died:
+
+```sh
+./dashboard/install.sh --node xah-node-1 --enable-peer-probe
+./dashboard/install.sh --node xah-node-2 --enable-peer-probe
+```
+
+`--enable-peer-probe` mints a dedicated ed25519 key on the dashboard node and
+authorises it on the peers, restricted by `from=` and stripped of pty and
+forwarding. It widens node-to-node trust, so it is an explicit flag and never
+happens on its own.
+
+It is **read only by construction**:
 
 * only `GET`/`HEAD` are answered — every other method is `405`
-* every remote command is a fixed probe string in the source, never anything
-  derived from a request
+* every probe is a fixed command string in the source, never anything derived
+  from a request
 * every ssh destination goes through the same forbidden-target check the shell
   scripts use, so it can no more reach the validator host than `ops/` can
 * static files are sandboxed to `dashboard/static/`
 
 It is **not** proxied and **not** public. It shows operational detail and has
-no authentication, so it binds to the LAN only and stays off NPM. Port 8088 is
-chosen to stay clear of the Proxmox UI on 8006; change it in
-`inventory.yml → cluster.monitoring`.
+no authentication, so it binds to the LAN only and stays off NPM. Change the
+port in `inventory.yml → cluster.monitoring`.
+
+Because it lives in a guest it does **not** report the thin pool — that is a
+host fact. `make growth MODE=host` stages itself on pve2 for one command and
+deletes itself again.
 
 `--once` prints the whole collected state as JSON and exits, which is the
 quickest way to see what the page is working from:
 
 ```sh
 ./dashboard/xah-dashboard.py --once | less
-curl -s http://192.168.1.120:8088/api/state | jq .
-curl -s http://192.168.1.120:8088/healthz
+curl -s http://192.168.1.110:8088/api/state | jq .
+curl -s http://192.168.1.110:8088/healthz
 ```
+
 
 ---
 
@@ -221,12 +243,16 @@ perform the prune that would free the room.
 growing into the array that holds the other VMs. In normal operation it should
 never get there.
 
-**4. Monitoring before the node exists.** `make host-prep` stands up
-`growth-watch.sh` first. A bigger cap means more runway before the filesystem
-stops the node, which makes the monitoring *more* important, not less — **700
-GiB without growth-watch running is worse than 500 GiB with it.** It alerts on
-`metadata_percent` as well as `data_percent`, because metadata exhaustion kills
-a pool just as dead and is the failure people do not see coming.
+**4. The monitoring lives in the guests, not on the hypervisor.** A bigger cap
+means more runway before the filesystem stops the node, which makes monitoring
+*more* important, not less — **700 GiB without growth-watch running is worse
+than 500 GiB with it.** So `20-guest-bootstrap.sh` installs the growth, prune
+and health crons inside each node, and the dashboard runs there too. pve2 gets
+nothing resident: `make host-check` only reports, and `make growth MODE=host`
+stages itself for one command and deletes itself. Guest-side growth-watch
+alerts on the DB volume; the thin pool's `metadata_percent` — which kills a
+pool just as dead as `data_percent` and is the failure people do not see
+coming — is checked on demand from `make space` and `make growth MODE=host`.
 
 **5. Admin RPC never leaves localhost.** Enforced three times over:
 `render-config.sh` will not write a config with admin on `0.0.0.0`,

@@ -16,13 +16,20 @@
 #   dashboard/install.sh --sync-only        # push files, do not touch the service
 #   dashboard/install.sh --status           # is it up, what does /healthz say
 #   dashboard/install.sh --uninstall        # stop, disable, remove the unit
+#   dashboard/install.sh --enable-peer-probe
+#       Mint a key on the dashboard node and authorise it on the other enabled
+#       nodes so their cards read live instead of 'ssh probe failed'. This
+#       widens node-to-node trust, so it is an explicit flag and never
+#       automatic. The key is restricted by source address and stripped of
+#       pty/forwarding, and it is separate from any key you use yourself.
 set -Eeuo pipefail
 . "$(dirname "$(readlink -f "$0")")/../lib/common.sh"
 
-MODE=install; NODE=""
+MODE=install; NODE=""; PEERKEY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)      NODE="$2"; shift 2 ;;
+    --enable-peer-probe) PEERKEY=1; shift ;;
     --sync-only) MODE=sync; shift ;;
     --status)    MODE=status; shift ;;
     --uninstall) MODE=uninstall; shift ;;
@@ -95,18 +102,49 @@ ok "synced"
 # generating one and quietly widening node-to-node trust.
 PEERS="$("$INV" nodes --enabled | grep -vx "$NODE" || true)"
 if [ -n "$PEERS" ]; then
-  if node_ssh "$NODE" "ls /root/.ssh/id_* >/dev/null 2>&1"; then
+  if [ "$PEERKEY" = 1 ]; then
+    hdr "peer probe key"
+    KEYFILE=/root/.ssh/xah-dashboard
+    node_ssh "$NODE" "mkdir -p /root/.ssh && chmod 700 /root/.ssh
+      [ -f $KEYFILE ] || ssh-keygen -q -t ed25519 -N '' -C 'xah-dashboard@$NODE' -f $KEYFILE
+      grep -q 'IdentityFile $KEYFILE' /root/.ssh/config 2>/dev/null || {
+        printf 'Host *\n  IdentityFile %s\n' $KEYFILE >> /root/.ssh/config
+        chmod 600 /root/.ssh/config; }"
+    PUB="$(node_ssh "$NODE" "cat ${KEYFILE}.pub")"
+    [ -n "$PUB" ] || die "could not read the peer probe public key from $NODE"
+    ok "key on $NODE: $(cut -d' ' -f3 <<< "$PUB")"
+
+    while read -r peer; do
+      [ -z "$peer" ] && continue
+      paddr="$("$INV" node "$peer" address)"
+      guard_reject_target "$peer" "$paddr"
+      # Restricted: only from the dashboard node, no pty, no forwarding. The
+      # probe is a heredoc script, so a forced command= would break it — the
+      # real containment is that the collector only ever sends fixed probes.
+      RESTRICT="from=\"${N_ADDRESS}\",no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty"
+      node_ssh "$peer" "mkdir -p /root/.ssh && chmod 700 /root/.ssh
+        touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+        grep -qF '$(cut -d' ' -f2 <<< "$PUB")' /root/.ssh/authorized_keys \
+          || printf '%s %s\n' '$RESTRICT' '$PUB' >> /root/.ssh/authorized_keys"
+      node_ssh "$NODE" "ssh-keyscan -T 4 -H '$paddr' >> /root/.ssh/known_hosts 2>/dev/null; sort -u -o /root/.ssh/known_hosts /root/.ssh/known_hosts" || true
+      if node_ssh "$NODE" "ssh -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new root@$paddr true"; then
+        ok "$NODE -> $peer: probe key works"
+      else
+        warn "$NODE -> $peer: key installed but the test connection failed"
+      fi
+    done <<< "$PEERS"
+  elif node_ssh "$NODE" "ls /root/.ssh/xah-dashboard >/dev/null 2>&1"; then
     while read -r peer; do
       [ -z "$peer" ] && continue
       paddr="$("$INV" node "$peer" address)"
       guard_reject_target "$peer" "$paddr"
       node_ssh "$NODE" "ssh-keyscan -T 4 -H '$paddr' >> /root/.ssh/known_hosts 2>/dev/null; sort -u -o /root/.ssh/known_hosts /root/.ssh/known_hosts" || true
     done <<< "$PEERS"
-    ok "pre-seeded known_hosts for peers: $(tr '\n' ' ' <<< "$PEERS")"
+    ok "peer probe key already present; known_hosts refreshed"
   else
-    warn "$NODE has no ssh key, so peer cards ($(tr '\n' ' ' <<< "$PEERS")) will show"
+    warn "$NODE has no peer probe key, so peer cards ($(tr '\n' ' ' <<< "$PEERS")) will show"
     warn "'ssh probe failed'. Its own card is read locally and is unaffected."
-    info "to enable peer probing later, give $NODE a key and authorise it on the peers"
+    info "enable it deliberately with: dashboard/install.sh --node $NODE --enable-peer-probe"
   fi
 fi
 

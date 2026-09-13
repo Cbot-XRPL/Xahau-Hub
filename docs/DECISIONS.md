@@ -116,8 +116,17 @@ redone, not something LVM does quietly at 3am.
 
 More runway before the filesystem stops the node means more time for a problem
 to go unnoticed. **700 GiB without `growth-watch.sh` running is worse than
-500 GiB with it.** That is why `make host-prep` installs the monitoring before
-the first node exists.
+500 GiB with it.** So the growth/prune/health crons go in during
+`20-guest-bootstrap.sh`, before the node is ever started, and the dashboard is
+installed as soon as the node answers.
+
+All of it runs **inside the guests**. An earlier version installed the ops
+tooling, a cron and the dashboard onto pve2 itself; that was wrong. pve2 is a
+shared hypervisor that also runs the ai-hub builder VM, and a node-provisioning
+repo does not get to leave resident agents on it — or rewrite host-global LVM
+policy — as a side effect of `make`. The host now gets nothing persistent:
+`05-host-check.sh` reports and never writes, and `ops/host-run.sh` stages the
+repo on pve2 for exactly one command before deleting it.
 
 ---
 

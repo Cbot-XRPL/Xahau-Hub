@@ -35,8 +35,13 @@ for node in "${NODES[@]}"; do
   remote="${CMD[0]}"
   case "$remote" in /*) : ;; *) remote="$N_OPS_DIR/$remote" ;; esac
   rest=("${CMD[@]:1}")
+  # printf runs its format once even with no arguments, so `printf '%q ' ` on an
+  # empty array yields "'' " — one empty argument the remote script then has to
+  # reject. Build the argument string only when there actually are arguments.
+  argstr=""
+  [ "${#rest[@]}" -gt 0 ] && argstr="$(printf '%q ' "${rest[@]}")"
   node_ssh "$node" \
-    "XAH_REPO_ROOT=$N_OPS_DIR XAH_NODE=$node XAH_YES=${XAH_YES:-0} $remote $(printf '%q ' "${rest[@]}")" \
+    "XAH_REPO_ROOT=$N_OPS_DIR XAH_NODE=$node XAH_YES=${XAH_YES:-0} $remote $argstr" \
     || { err "$node: $remote exited non-zero"; RC=1; }
 done
 exit "$RC"
