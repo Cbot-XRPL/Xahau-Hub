@@ -231,6 +231,23 @@ cluster:
     # WebSocket hardening, from Xahau's own shipped defaults. A subscribe is a
     # long-lived connection; without a send-queue bound one slow consumer can
     # make the server buffer without limit on its behalf.
+    # ── edge rate limiting (config/xahaud-edge.conf.j2) ─────────────────────
+    #  nginx on the node itself, in front of xahaud. Measured: xahaud alone
+    #  served 150 req at ~146 req/s without throttling anything, so without
+    #  this one caller can saturate the endpoint.
+    #  The tunnel points at these ports; xahaud's own 5007/6006 stay bound to
+    #  the LAN and must never be routed publicly, or the limit is bypassed.
+    edge_rpc_port: 15007
+    edge_ws_port: 16006
+    edge_rpc_rate: "15r/s"       # per real client, not per tunnel
+    edge_rpc_burst: 30           # absorbs a page-load flurry
+    edge_rpc_conn: 24            # concurrent RPC connections per client
+    edge_ws_conn: 8              # concurrent WS subscriptions per client
+    edge_zone_size: 10m          # ~160k client addresses tracked
+    edge_max_body: 256k
+    edge_read_timeout: 95s       # just under Cloudflare's ~100s cutoff
+    edge_ws_timeout: 3600s
+
     ws_limit: 50000
     ws_send_queue_limit: 20000
     ws_ping_frequency: 10

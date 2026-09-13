@@ -1,0 +1,117 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  xahaud-edge — rate limiting in front of xahaud, on the node itself.
+#
+#  RENDERED FILE. Edit config/xahaud-edge.conf.j2, not this.
+#  node: {{ node_name }}   rendered: {{ rendered_at }}
+#
+#  WHY THIS EXISTS
+#  Measured on the live endpoint: 150 requests at ~146 req/s all returned 200
+#  with load_factor pinned at 1. xahaud does not rate limit a public endpoint
+#  at any rate a client can actually produce. One caller can saturate it.
+#
+#  WHY KEYED ON A HEADER, NOT THE SOCKET
+#  Every request arrives from the cloudflared host ({{ proxy_address }}), because
+#  the tunnel terminates there. Keying on $remote_addr would give ONE bucket for
+#  the entire internet: the first busy client would throttle everyone else, and
+#  the limit would be useless as protection and harmful as policy. Cloudflare
+#  sets CF-Connecting-IP to the real client, and it is the only hop that saw it.
+#
+#  SPOOFING
+#  Cloudflare OVERWRITES CF-Connecting-IP at the edge, so a client cannot set
+#  it. That holds only while the node is unreachable except through the tunnel.
+#  If these ports are ever exposed directly, this header becomes attacker
+#  controlled and the limit becomes decorative. They must stay LAN-only.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Real client if Cloudflare told us, socket address otherwise (LAN / direct).
+map $http_cf_connecting_ip $xah_client {
+    ""      $remote_addr;
+    default $http_cf_connecting_ip;
+}
+
+# Keep the upgrade handshake correct regardless of what the client sent.
+map $http_upgrade $xah_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# The default `combined` format logs $remote_addr, which behind the tunnel is
+# always the cloudflared host. Every line would name the same address and the
+# log would be worthless for the one thing it is for: finding out who is
+# hammering us. Log the key we actually limit on.
+log_format xah_edge '$xah_client "$request" $status $body_bytes_sent '
+                    'rt=$request_time via=$remote_addr "$http_user_agent"';
+
+limit_req_zone  $xah_client zone=xah_rpc_req:{{ zone_size }}  rate={{ rpc_rate }};
+limit_conn_zone $xah_client zone=xah_rpc_conn:{{ zone_size }};
+limit_conn_zone $xah_client zone=xah_ws_conn:{{ zone_size }};
+
+# 429 rather than nginx's default 503: a client that backs off correctly needs
+# to know it was rate limited, not that the service is down.
+limit_req_status  429;
+limit_conn_status 429;
+limit_req_log_level warn;
+
+# ── JSON-RPC ────────────────────────────────────────────────────────────────
+server {
+    listen {{ edge_rpc_port }};
+    listen [::]:{{ edge_rpc_port }};
+    server_name _;
+
+    # A JSON-RPC body is small. This is a cheap way to refuse a payload that
+    # could only be an attempt to make us allocate.
+    client_max_body_size {{ max_body }};
+    client_body_timeout 15s;
+
+    access_log /var/log/nginx/xahaud-edge-rpc.log xah_edge buffer=16k flush=10s;
+
+    location / {
+        limit_req  zone=xah_rpc_req burst={{ rpc_burst }} nodelay;
+        limit_conn xah_rpc_conn {{ rpc_conn }};
+
+        proxy_pass http://127.0.0.1:{{ rpc_public_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $xah_client;
+        proxy_set_header X-Forwarded-For $xah_client;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Connection "";
+
+        # A historical account_tx is slow; anything past this is upstream's
+        # ~100s cutoff anyway, so failing earlier just frees the worker.
+        proxy_read_timeout {{ read_timeout }};
+        proxy_send_timeout {{ read_timeout }};
+        proxy_connect_timeout 5s;
+    }
+}
+
+# ── WebSocket ───────────────────────────────────────────────────────────────
+#  Limited by CONCURRENT CONNECTIONS, not request rate. A subscribe is one
+#  request that then streams for hours; a request-rate limit would measure
+#  nothing and a burst limit would kill reconnect storms that are legitimate.
+server {
+    listen {{ edge_ws_port }};
+    listen [::]:{{ edge_ws_port }};
+    server_name _;
+
+    access_log /var/log/nginx/xahaud-edge-ws.log xah_edge buffer=16k flush=10s;
+
+    location / {
+        limit_conn xah_ws_conn {{ ws_conn }};
+
+        proxy_pass http://127.0.0.1:{{ ws_public_port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $xah_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $xah_client;
+        proxy_set_header X-Forwarded-For $xah_client;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Long-lived and idle by design. Without this the stream dies at 60s
+        # and clients see disconnects they cannot explain.
+        proxy_read_timeout {{ ws_timeout }};
+        proxy_send_timeout {{ ws_timeout }};
+        proxy_buffering off;
+    }
+}
