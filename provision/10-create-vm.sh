@@ -106,17 +106,45 @@ if [ "$MODE" = cloudinit ]; then
     mkdir -p "$(dirname "$IMG")"
     curl -fL --progress-bar -o "$IMG.part" "$N_CLOUDIMG_URL" && mv "$IMG.part" "$IMG"
   fi
-  run qm importdisk "$N_VMID" "$IMG" "$N_STORAGE"
-  run qm set "$N_VMID" --scsi0 "$N_STORAGE:vm-$N_VMID-disk-0,$N_DISK_OPTS"
+  [ "$DRY" = 1 ] || [ -f "$IMG" ] || die "cloud image missing: $IMG"
+
+  # `qm importdisk` is the legacy spelling of `qm disk import`; prefer the
+  # modern one and fall back, so this keeps working across PVE versions.
+  IMPORT=(qm disk import "$N_VMID" "$IMG" "$N_STORAGE")
+  if [ "$DRY" = 0 ] && ! qm help disk >/dev/null 2>&1; then
+    IMPORT=(qm importdisk "$N_VMID" "$IMG" "$N_STORAGE")
+  fi
+  if [ "$DRY" = 1 ]; then
+    printf '  %s\n' "${IMPORT[*]}"
+    VOL="$N_STORAGE:vm-$N_VMID-disk-0"
+  else
+    info "+ ${IMPORT[*]}"
+    IMPORT_OUT="$("${IMPORT[@]}" 2>&1 | tee /dev/stderr)"
+    # Read the volume id back from the config rather than assuming disk-0 —
+    # the numbering depends on what the VM already has.
+    VOL="$(qm config "$N_VMID" | awk -F'[:,]' '/^unused[0-9]+:/{print $2":"$3; exit}' | tr -d ' ')"
+    [ -n "$VOL" ] || VOL="$(grep -oE "'[^']*vm-$N_VMID-disk-[0-9]+'" <<<"$IMPORT_OUT" | tr -d "'" | tail -1)"
+    [ -n "$VOL" ] || die "could not determine the imported volume id. Check: qm config $N_VMID"
+    ok "imported as $VOL"
+  fi
+
+  run qm set "$N_VMID" --scsi0 "$VOL,$N_DISK_OPTS"
   run qm resize "$N_VMID" scsi0 "${N_ROOT_GIB}G"
   run qm set "$N_VMID" --ide2 "$N_STORAGE:cloudinit" --boot order=scsi0
+  # Cloud images expect a serial console; keep the graphical one as well so
+  # the noVNC console in the UI still works if something needs eyeballing.
+  run qm set "$N_VMID" --serial0 socket
   run qm set "$N_VMID" --ipconfig0 "ip=$N_ADDRESS/$N_NETMASK_CIDR,gw=$N_GATEWAY" \
                        --nameserver "$N_NAMESERVERS" --ciuser root
-  KEYS="${SSHKEY:-/root/.ssh/authorized_keys}"
+  # cloud-init sets the guest hostname from the VM name, which inventory
+  # guarantees is the node name — the ops scripts resolve themselves from it.
+  KEYS="${SSHKEY:-/root/.xahau-hub/guest-keys.pub}"
+  [ -f "$KEYS" ] || KEYS=/root/.ssh/authorized_keys
   if [ -f "$KEYS" ]; then
     run qm set "$N_VMID" --sshkeys "$KEYS"
+    ok "injected $(grep -c . "$KEYS" 2>/dev/null || echo '?') ssh key(s) from $KEYS"
   else
-    warn "no ssh key at $KEYS — cloud-init image has no password login. Pass --sshkey FILE."
+    die "no ssh key file found. A cloud image has no password login — the VM would be unreachable. Pass --sshkey FILE."
   fi
 else
   run qm set "$N_VMID" --scsi0 "$N_STORAGE:$N_ROOT_GIB,$N_DISK_OPTS"

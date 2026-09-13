@@ -6,14 +6,22 @@
 #  validator running in CT 200 on the R730xd — that host's keys never appear
 #  here or anywhere else in this repo.
 #
-#  VERIFY the key and site below against the current published Xahau values
-#  before first start (xahau.network / the Xahau docs). A stale validator_list
-#  key means the node cannot fetch the UNL and will never reach `full`.
-#  ops/healthcheck.sh flags a node stuck in `connected`/`syncing`.
+#  VERIFIED 2026-09-13 against https://vl.xahau.org (live fetch):
+#    publisher key  EDA46E9C39B1389894E690E58914DC1029602870370A0993E5B87C4A24EAF4A8E8
+#    list sequence  2026062301
+#    expires        2027-06-24 00:00 UTC
+#    validators     19
+#
+#  RE-CHECK BEFORE THE LIST EXPIRES. A node whose UNL has expired stops
+#  advancing. A wrong publisher key means the node cannot fetch the UNL at all
+#  and will never reach `full` — ops/healthcheck.sh flags a node stuck in
+#  `connected`/`syncing`, which is the symptom.
+#
+#    curl -s https://vl.xahau.org | jq -r .public_key
 # ══════════════════════════════════════════════════════════════════════════════
 
 [validator_list_sites]
 https://vl.xahau.org
 
 [validator_list_keys]
-ED45D1840EE724BE327ABE9146503D5848EFD5F38B6D5FEDE71E80ACCE5E6E738B
+EDA46E9C39B1389894E690E58914DC1029602870370A0993E5B87C4A24EAF4A8E8
