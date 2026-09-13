@@ -369,7 +369,7 @@ function render(s) {
 
 async function poll() {
   try {
-    const r = await fetch('/api/state', { cache: 'no-store' });
+    const r = await fetch('api/state', { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     render(await r.json());
   } catch (e) {

@@ -633,6 +633,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "xah-dashboard"
     sys_version = ""
     collector = None
+    # Mount point, e.g. "/status" when something routes a sub-path here. Empty
+    # means served at the root, which is still the default.
+    prefix = ""
 
     def log_message(self, fmt, *args):  # quiet: journald gets the important lines
         pass
@@ -653,6 +656,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        # Served under a prefix, the origin still sees the WHOLE path: a tunnel
+        # or proxy that matched /status/* forwards /status/* verbatim, it does
+        # not strip what it matched. Strip it here so everything below — and
+        # every relative URL in the page — is mount-point agnostic.
+        if self.prefix:
+            if path == self.prefix:
+                # Without the trailing slash every relative asset in index.html
+                # would resolve one level too high, against the site root.
+                return self._send(301, "", "text/plain; charset=utf-8",
+                                  {"Location": self.prefix + "/"})
+            if not path.startswith(self.prefix + "/"):
+                return self._send(404, "not found\n", "text/plain; charset=utf-8")
+            path = path[len(self.prefix):]
         if path == "/api/state":
             s = self.collector.snapshot()
             return self._send(200, json.dumps(s, default=str), "application/json; charset=utf-8",
@@ -687,6 +703,8 @@ def main(argv):
     ap.add_argument("--bind", default=os.environ.get("XAH_DASH_BIND", "0.0.0.0"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("XAH_DASH_PORT", "8088")))
     ap.add_argument("--refresh", type=float, default=float(os.environ.get("XAH_DASH_REFRESH", "20")))
+    ap.add_argument("--path-prefix", default=os.environ.get("XAH_DASH_PREFIX", ""),
+                    help="serve under this path instead of the root, e.g. /status")
     ap.add_argument("--node", default=os.environ.get("XAH_NODE") or None)
     ap.add_argument("--once", action="store_true", help="collect once, print JSON, exit")
     ap.add_argument("--allow-any-host", action="store_true", help=argparse.SUPPRESS)
@@ -709,10 +727,13 @@ def main(argv):
 
     threading.Thread(target=col.run_forever, daemon=True).start()
     Handler.collector = col
+    pfx = "/" + (args.path_prefix or "").strip().strip("/")
+    Handler.prefix = "" if pfx == "/" else pfx
     httpd = ThreadingHTTPServer((args.bind, args.port), Handler)
     httpd.daemon_threads = True
-    sys.stderr.write("xah-dashboard listening on http://%s:%d/  (refresh %gs, in guest %s)\n"
-                     % (args.bind, args.port, args.refresh, col.self_node or col.hostname))
+    sys.stderr.write("xah-dashboard listening on http://%s:%d%s/  (refresh %gs, in guest %s)\n"
+                     % (args.bind, args.port, Handler.prefix, args.refresh,
+                        col.self_node or col.hostname))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -180,6 +180,11 @@ cluster:
 
     bind: 0.0.0.0                   # inside the guest; the LAN reaches the node
     port: 8088                      # collides with nothing xahaud binds
+
+    # The PUBLIC status + API docs page (dashboard/install-public.sh). Distinct
+    # from the ops dashboard above: it polls the public RPC and can only show
+    # what any caller already sees, so it is safe to route through the tunnel.
+    public_port: 8090
     refresh_s: 20                   # collector interval; the page polls faster
 
   # ── VM defaults applied by provision/10-create-vm.sh ──────────────────────
