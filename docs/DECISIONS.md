@@ -282,19 +282,65 @@ config:
 
 ## Other things to verify rather than trust
 
-- **The xahaud installer URL** in `inventory.yml`
-  (`cluster.defaults.installer_url`) and its layout. Record its SHA256 in
-  `XAHAUD_INSTALLER_SHA256` once known, so bootstrap stops running an unpinned
-  script from the network.
-- **The `validator_list_keys` and site** in `config/validators.txt`, against
-  the currently published Xahau values. A stale key means the node never
-  reaches `full`.
+- ~~The xahaud installer URL and its SHA256~~ — **RESOLVED 2026-09-13**, see
+  "The installer, verified" below.
+- ~~The `validator_list_keys` and site~~ — **RESOLVED 2026-09-13.** The key
+  originally written here was wrong; verified live against
+  <https://vl.xahau.org> (sequence 2026062301, 19 validators, expires
+  2027-06-24). Re-check before expiry with
+  `curl -s https://vl.xahau.org | jq -r .public_key`.
 - **`pve`'s actual IP address** in `cluster.forbidden.host_addresses`. It is
   currently `192.168.1.121`, which is a placeholder. Correct it — never remove
   it.
-- **Whether the installer's auto-update timer ever rewrites the config.**
-  Bootstrap warns if the timer exists. Binary updates are fine; a config
-  rewrite would silently undo everything here.
+---
+
+## The installer, verified
+
+Read before running, 2026-09-13. `20-guest-bootstrap.sh` refuses to run it if
+the hash does not match, because it runs as root.
+
+| | |
+|---|---|
+| url | `https://raw.githubusercontent.com/Xahau/mainnet-docker/main/xahaud-install-update.sh` |
+| sha256 | `fd89358832a36e08f761f2d469cbe063d873ffde25c79e122ecaa0ff3586a534` |
+
+It lives in **`Xahau/mainnet-docker`**, not `Xahau/xahaud` — the latter path
+404s. Binaries come from `https://build.xahau.tech/`.
+
+What it actually does:
+
+- creates the `xahaud` system user and `/opt/xahaud/{bin,etc,db,log,downloads}`
+- installs the binary to `/opt/xahaud/bin/xahaud`, symlinks `/usr/local/bin/xahaud`
+- writes `/etc/systemd/system/xahaud.service` with
+  `ExecStart=/opt/xahaud/bin/xahaud --silent --conf /opt/xahaud/etc/xahaud.cfg`
+- writes a **default config** at `/opt/xahaud/etc/xahaud.cfg` — but only if no
+  file is there. Its defaults are not ours: admin RPC on **5009**,
+  `peers_max 20`, `[overlay] ip_limit = 1024`
+
+**There is no auto-update timer and no cron.** That VERIFY item is answered:
+updates are a manual re-run of the same script, and a re-run cannot clobber
+the config because it only writes a default when the file is absent.
+
+### Why the installer's config becomes a symlink
+
+Two config files, one of which systemd's stock `ExecStart` points at, is a
+coin-flip over which one is live. So bootstrap backs up the installer's
+default once to `*.installer-default.bak` and replaces it with a symlink to
+`/etc/opt/xahaud/xahaud.cfg`. Every path then reads the repo's config, and the
+systemd drop-in pinning `--conf` becomes belt-and-braces rather than the only
+thing holding it together.
+
+(The installer also creates `/etc/opt/xahau/xahaud.cfg` — note the missing
+`d`, an upstream typo. Harmless; we do not use it.)
+
+### `[overlay] ip_limit`
+
+The installer's default sets `ip_limit = 1024`. Worth knowing, because all
+nodes here share one public IP and xahaud limits inbound connections per
+source IP. We do not set it — `peers_max` stays modest (40 deep / 30 api) and
+the nodes peer outbound, per the spec. If inbound peering ever needs tuning,
+this is the knob, and it belongs in the template rather than in a default
+config nobody reads.
 
 ---
 

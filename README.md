@@ -138,6 +138,10 @@ inventory.yml           ← nodes, sizes, ports, thresholds, guard list, NVMe pl
 │   ├── migrate-to-nvme.sh      phase 1.5, one node at a time
 │   ├── remote.sh               run any of these ON a node, through the guards
 │   └── backup-config.sh        configs + seed MANIFEST (never the seeds)
+├── dashboard/
+│   ├── xah-dashboard.py        read-only monitor, stdlib only, systemd on the host
+│   ├── install.sh              push + unit + start + /healthz gate
+│   └── static/                 one page, no build step, no CDN, no webfonts
 ├── lib/                        inventory parser, renderer, guards, rpc, logging
 ├── tests/guard-test.sh         35 assertions — `make guards`
 ├── proxy/npm-notes.md          NPM upstreams, sticky WS, rate limits
@@ -151,6 +155,48 @@ inventory.yml           ← nodes, sizes, ports, thresholds, guard list, NVMe pl
 No external dependencies. `lib/inventory.py` uses PyYAML when it is installed
 and falls back to a parser for the subset `inventory.yml` is written in, so
 nothing needs installing on a Proxmox host or a fresh Ubuntu guest.
+
+---
+
+## Monitoring dashboard
+
+```sh
+make dashboard          # install or restart it on the host
+make dashboard-status   # is it up, and where
+```
+
+Then open **http://192.168.1.120:8088/** on the LAN.
+
+One page, refreshed every 20s by a collector thread on the host: overview
+tiles, a card per node, a card for the host and its thin pool. While the
+cluster is still being built it doubles as the build tracker — each node shows
+where it is in the nine provisioning stages, from `VM created` through
+`Synced to network`, so the answer to "is node 2 up yet" is a glance rather
+than four ssh sessions.
+
+It is **read only by construction**, and that is the point of putting a web
+server on a hypervisor at all:
+
+* only `GET`/`HEAD` are answered — every other method is `405`
+* every remote command is a fixed probe string in the source, never anything
+  derived from a request
+* every ssh destination goes through the same forbidden-target check the shell
+  scripts use, so it can no more reach the validator host than `ops/` can
+* static files are sandboxed to `dashboard/static/`
+
+It is **not** proxied and **not** public. It shows operational detail and has
+no authentication, so it binds to the LAN only and stays off NPM. Port 8088 is
+chosen to stay clear of the Proxmox UI on 8006; change it in
+`inventory.yml → cluster.monitoring`.
+
+`--once` prints the whole collected state as JSON and exits, which is the
+quickest way to see what the page is working from:
+
+```sh
+./dashboard/xah-dashboard.py --once | less
+curl -s http://192.168.1.120:8088/api/state | jq .
+curl -s http://192.168.1.120:8088/healthz
+```
 
 ---
 

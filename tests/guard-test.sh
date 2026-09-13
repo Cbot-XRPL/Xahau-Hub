@@ -110,6 +110,18 @@ if [ -f /tmp/goodrender/xahaud.cfg ]; then
 fi
 rm -rf /tmp/goodrender
 
+printf '\n── the dashboard does not live on the Proxmox host ─────────────\n'
+BADINV="$(mktemp)"
+sed -E 's/^(    host: )ai-hub/\1pve2/; s/^(    host_address: )192\.168\.1\.66/\1192.168.1.120/' \
+  "$XAH_REPO_ROOT/inventory.yml" > "$BADINV"
+refuses "installing the dashboard on pve2" \
+  env XAH_INVENTORY="$BADINV" "$XAH_REPO_ROOT/dashboard/install.sh" --status
+allows  "monitoring.host is a VM, not the host" bash -c '
+  h=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.monitoring.host)
+  p=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.host.name)
+  [ "$h" != "$p" ]'
+rm -f "$BADINV"
+
 printf '\n── host-side scripts refuse to run off-host ────────────────────\n'
 if [ "$(hostname -s)" != "$("$INV" get cluster.host.name)" ]; then
   refuses "01-space-check.sh off-host"  "$REPO_ROOT/provision/01-space-check.sh"

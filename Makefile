@@ -6,7 +6,7 @@
 #
 #  Typical first run (phase 1):
 #     make check                    # inventory math, no overcommit, guards
-#     make host-prep                # ON pve2: lvm.conf + growth-watch cron
+#     make host-check               # READ-ONLY preflight on pve2, changes nothing
 #     make create-vm  NODE=xah-node-1
 #     ... install Ubuntu ...
 #     make attach-db  NODE=xah-node-1
@@ -21,15 +21,19 @@
 SHELL   := /bin/bash
 .DEFAULT_GOAL := help
 INV     := ./lib/inventory.py
+# Host-side scripts need the Proxmox host. host-run.sh stages this repo into a
+# temp dir there, runs one command, and deletes it — so nothing of ours lives on
+# pve2. Standing on pve2 already? It runs in place and stages nothing.
+HOSTRUN := ./ops/host-run.sh
 NODE    ?=
 HISTORY ?= initial
 YES     ?= 0
 export XAH_YES = $(YES)
 
-.PHONY: help check inventory guards host-prep space create-vm attach-db bootstrap \
+.PHONY: help check inventory guards host-check space create-vm attach-db bootstrap \
         seed seeds render render-all deploy deploy-all cluster cluster-deploy \
-        health measure growth growth-nodes prune prune-status seed-from backup \
-        nvme migrate phase2 status lint clean
+        health measure growth growth-nodes prune prune-status seed-from backup net \
+        nvme migrate phase2 status lint clean dashboard dashboard-status
 
 ## help: this list
 help:
@@ -66,23 +70,27 @@ lint:
 	  python3 -m py_compile lib/*.py && rm -rf lib/__pycache__; \
 	  [ $$rc = 0 ] && printf '\033[32mall scripts parse\033[0m\n'; exit $$rc
 
-## host-prep: ON pve2 — lvm.conf autoextend + growth-watch cron (do this FIRST)
-host-prep:
-	@./provision/05-host-prep.sh
+## host-check: READ-ONLY preflight on pve2 (lvm policy, space, media, residue)
+host-check:
+	@$(HOSTRUN) provision/05-host-check.sh
 
 ## space: no-overcommit check against the real thin pool
 space:
-	@./provision/01-space-check.sh $(if $(REMOTE),--remote,)
+	@$(HOSTRUN) provision/01-space-check.sh
+
+## net: verify gateway, DNS, free addresses and reachable endpoints
+net:
+	@$(HOSTRUN) provision/02-net-check.sh $(NODE)
 
 ## create-vm: NODE=... create the VM with its ROOT DISK ONLY
 create-vm:
 	@[ -n "$(NODE)" ] || { echo 'NODE= is required'; exit 2; }
-	@./provision/10-create-vm.sh $(NODE) $(if $(MODE),--mode $(MODE),)
+	@$(HOSTRUN) provision/10-create-vm.sh $(NODE) $(if $(MODE),--mode $(MODE),)
 
 ## attach-db: NODE=... hot-add the database disk AFTER the OS install
 attach-db:
 	@[ -n "$(NODE)" ] || { echo 'NODE= is required'; exit 2; }
-	@./provision/11-attach-db-disk.sh $(NODE)
+	@$(HOSTRUN) provision/11-attach-db-disk.sh $(NODE)
 
 ## bootstrap: NODE=... sync the tooling then run the guest bootstrap over ssh
 bootstrap:
@@ -138,16 +146,17 @@ health:
 ## status: one-line status per node
 status:
 	@./ops/healthcheck.sh $(NODE) --quiet || true
-	@./ops/growth-watch.sh --mode host 2>/dev/null || true
+	@./ops/remote.sh --all -- ops/growth-watch.sh --mode guest 2>/dev/null || true
 
 ## measure: NODE=... GB per million ledgers (run when backfill is stable)
 measure:
 	@[ -n "$(NODE)" ] || { echo 'NODE= is required'; exit 2; }
 	@./ops/remote.sh $(NODE) -- ops/measure.sh $(if $(RECORD),--record,)
 
-## growth: df/du + thin pool data% and metadata%
+## growth: per-node DB growth (MODE=host routes to pve2 for thin pool data%)
 growth:
-	@./ops/growth-watch.sh --mode $(or $(MODE),auto)
+	@if [ "$(MODE)" = host ]; then $(HOSTRUN) ops/growth-watch.sh --mode host; \
+	 else ./ops/remote.sh --all -- ops/growth-watch.sh --mode guest; fi
 
 ## prune-status: what prune-guard would do right now, per node
 prune-status:
@@ -167,13 +176,21 @@ seed-from:
 	@[ -n "$(FROM)" ] && [ -n "$(TO)" ] || { echo 'FROM= and TO= are required'; exit 2; }
 	@./ops/seed-node.sh --from $(FROM) --to $(TO)
 
+## dashboard: install/restart the read-only monitoring dashboard INSIDE its node
+dashboard:
+	@./dashboard/install.sh $(if $(SYNC),--sync-only,)
+
+## dashboard-status: is the dashboard up, and at which URL
+dashboard-status:
+	@./dashboard/install.sh --status
+
 ## backup: configs + seed manifest (never the seeds) into backups/
 backup:
 	@./ops/backup-config.sh
 
 ## nvme: PHASE 1.5 — set up nvme-vg on the 4 TB NVMe (hardware must be present)
 nvme:
-	@./provision/00-nvme-setup.sh
+	@$(HOSTRUN) provision/00-nvme-setup.sh
 
 ## migrate: NODE=... move that node's DB volume to the NVMe, one node at a time
 migrate:

@@ -88,6 +88,12 @@ temp_store={{ sqlite_temp_store }}
 [debug_logfile]
 /var/log/xahaud/debug.log
 
+# ── Time ─────────────────────────────────────────────────────────────────────
+#  xahaud keeps its own time sync independently of chrony. Consensus is
+#  time-sensitive and a skewed clock misbehaves subtly rather than obviously.
+[sntp_servers]
+{{ sntp_servers_block }}
+
 [rpc_startup]
 { "command": "log_level", "severity": "{{ log_level }}" }
 
@@ -100,8 +106,7 @@ temp_store={{ sqlite_temp_store }}
 #  A copied seed means two nodes with one identity on the network.
 # ══════════════════════════════════════════════════════════════════════════════
 
-[node_seed]
-{{ node_seed }}
+{{ node_seed_block }}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  UNL — the published Xahau validator list. These are stock nodes; they do

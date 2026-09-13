@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex, nofollow">
+<title>xahau-hub — cluster monitor</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b0e14'/><path d='M9 10h4l3 4.4 3-4.4h4l-5 7 5 7h-4l-3-4.4-3 4.4H9l5-7z' fill='%2358a6ff'/></svg>">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap topbar__inner">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">X</span>
+      <span class="brand__text">
+        <strong id="clusterName">xahau-hub</strong>
+        <span class="brand__sub" id="clusterSub">cluster monitor</span>
+      </span>
+    </div>
+    <div class="topbar__status">
+      <span class="pulse" id="pulse" data-state="wait" role="status" aria-live="polite">
+        <span class="pulse__dot" aria-hidden="true"></span>
+        <span class="pulse__text" id="pulseText">connecting…</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+
+  <section aria-labelledby="overviewHeading">
+    <h2 class="section__title" id="overviewHeading">Overview</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section aria-labelledby="nodesHeading">
+    <h2 class="section__title" id="nodesHeading">Nodes</h2>
+    <div class="grid" id="nodes"></div>
+  </section>
+
+  <section aria-labelledby="hostHeading">
+    <h2 class="section__title" id="hostHeading">Host</h2>
+    <div class="grid" id="host"></div>
+  </section>
+
+</main>
+
+<footer class="wrap footer" id="footer"></footer>
+
+<template id="tpl-card">
+  <article class="card">
+    <header class="card__head">
+      <div class="card__ident">
+        <h3 class="card__title"></h3>
+        <p class="card__sub"></p>
+      </div>
+      <span class="chip"></span>
+    </header>
+    <div class="card__body"></div>
+  </article>
+</template>
+
+<script src="/app.js" defer></script>
+</body>
+</html>

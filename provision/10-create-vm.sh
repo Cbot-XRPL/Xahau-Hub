@@ -73,10 +73,14 @@ if [ "$DRY" = 0 ]; then
   if qm status "$N_VMID" >/dev/null 2>&1; then
     die "VMID $N_VMID already exists on $(hostname -s). Refusing to clobber it. Destroy it deliberately first, or pick a different vmid in inventory.yml."
   fi
-  hdr "pre-flight: no-overcommit"
+  hdr "pre-flight"
   "$REPO_ROOT/provision/01-space-check.sh" >/dev/null \
     || die "space check failed — refusing to provision. Run provision/01-space-check.sh for detail."
-  ok "space check passed"
+  ok "space check passed (no overcommit, reserve intact)"
+  "$REPO_ROOT/provision/02-net-check.sh" "$NODE" >/dev/null \
+    || die "network check failed — refusing to provision. Run provision/02-net-check.sh for detail.
+A VM built on a wrong gateway boots, answers ssh on the LAN, and has no internet — which looks like apt hanging, not like a network problem."
+  ok "network check passed (gateway answers, address free, endpoints reachable)"
 fi
 
 # ── create: root disk only ──────────────────────────────────────────────────
@@ -138,8 +142,15 @@ if [ "$MODE" = cloudinit ]; then
                        --nameserver "$N_NAMESERVERS" --ciuser root
   # cloud-init sets the guest hostname from the VM name, which inventory
   # guarantees is the node name — the ops scripts resolve themselves from it.
-  KEYS="${SSHKEY:-/root/.xahau-hub/guest-keys.pub}"
-  [ -f "$KEYS" ] || KEYS=/root/.ssh/authorized_keys
+  # Public keys travel with the staged repo (ops/host-run.sh puts them at
+  # $REPO_ROOT/guest-keys.pub), so the host needs no permanent copy of its own.
+  KEYS="${SSHKEY:-}"
+  if [ -z "$KEYS" ]; then
+    for cand in "$REPO_ROOT/guest-keys.pub" "$REPO_ROOT/secrets/guest-keys.pub" \
+                /root/.ssh/authorized_keys; do
+      [ -f "$cand" ] && { KEYS="$cand"; break; }
+    done
+  fi
   if [ -f "$KEYS" ]; then
     run qm set "$N_VMID" --sshkeys "$KEYS"
     ok "injected $(grep -c . "$KEYS" 2>/dev/null || echo '?') ssh key(s) from $KEYS"

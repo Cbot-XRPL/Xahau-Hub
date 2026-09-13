@@ -132,6 +132,12 @@ id -u "$N_XAHAUD_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nol
 mkdir -p "$N_DB_MOUNT/db/nudb" "$N_XAHAUD_LOG_DIR" "$N_XAHAUD_CFG_DIR" "$N_XAHAUD_PREFIX/bin" "$N_XAHAUD_PREFIX/etc"
 chown -R "$N_XAHAUD_USER:$N_XAHAUD_USER" "$N_DB_MOUNT" "$N_XAHAUD_LOG_DIR"
 chmod 750 "$N_DB_MOUNT" "$N_XAHAUD_LOG_DIR"
+# The config dir must be TRAVERSABLE by the xahaud user or it cannot read its
+# own config — it fails with "Permission denied", falls back to compiled-in
+# defaults, and tries to create a database next to the config. root owns the
+# directory so the daemon cannot rewrite its own config; the xahaud group gets
+# r-x so it can reach the file inside.
+chown root:"$N_XAHAUD_USER" "$N_XAHAUD_CFG_DIR"
 chmod 750 "$N_XAHAUD_CFG_DIR"
 ok "layout: db=$N_DB_MOUNT/db  logs=$N_XAHAUD_LOG_DIR  cfg=$N_XAHAUD_CFG"
 
@@ -146,13 +152,19 @@ else
   info "fetching installer: $INSTALLER"
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   if curl -fsSL --max-time 60 -o "$TMP/install.sh" "$INSTALLER"; then
-    if [ -n "${XAHAUD_INSTALLER_SHA256:-}" ]; then
-      echo "$XAHAUD_INSTALLER_SHA256  $TMP/install.sh" | sha256sum -c - \
-        || die "installer checksum mismatch — refusing to run it"
-      ok "installer checksum verified"
+    EXPECT_SHA="${XAHAUD_INSTALLER_SHA256:-${N_INSTALLER_SHA256:-}}"
+    if [ -n "$EXPECT_SHA" ]; then
+      GOT_SHA="$(sha256sum "$TMP/install.sh" | awk '{print $1}')"
+      if [ "$GOT_SHA" != "$EXPECT_SHA" ]; then
+        err "installer checksum mismatch — refusing to run it"
+        err "  expected $EXPECT_SHA"
+        err "  got      $GOT_SHA"
+        die "Either the installer was updated upstream (re-verify it by hand, then update cluster.defaults.installer_sha256 in inventory.yml) or something is wrong. Do not run an unverified installer as root."
+      fi
+      ok "installer checksum verified ($GOT_SHA)"
     else
-      warn "XAHAUD_INSTALLER_SHA256 not set — running an unpinned installer from the network."
-      warn "Pin it once you have recorded the hash. See docs/DECISIONS.md."
+      warn "no pinned checksum — running an unpinned installer from the network as root."
+      warn "Set cluster.defaults.installer_sha256 in inventory.yml. See docs/DECISIONS.md."
     fi
     sed -n '1,3p' "$TMP/install.sh" >&2
     confirm "Run the xahaud installer?"
@@ -164,14 +176,28 @@ else
   ok "installed $("$N_XAHAUD_BIN" --version 2>/dev/null | head -1 || true)"
 fi
 
-# The official installer keeps its config under $prefix/etc; the repo owns
-# $N_XAHAUD_CFG. Symlink so both paths resolve to the same file.
-if [ ! -e "$N_XAHAUD_PREFIX/etc/xahaud.cfg" ] || [ -L "$N_XAHAUD_PREFIX/etc/xahaud.cfg" ]; then
-  ln -sfn "$N_XAHAUD_CFG" "$N_XAHAUD_PREFIX/etc/xahaud.cfg"
-  ok "symlinked $N_XAHAUD_PREFIX/etc/xahaud.cfg -> $N_XAHAUD_CFG"
+# ── one config, not two ─────────────────────────────────────────────────────
+# The installer writes a real default config at $prefix/etc/xahaud.cfg (admin
+# on port 5009, peers_max 20) and points its ExecStart at it. The repo owns
+# $N_XAHAUD_CFG. Leaving both in place means two configs and a coin-flip over
+# which one is live, so the installer's copy is backed up once and replaced
+# with a symlink. Whichever path anything uses, it reads the repo's config.
+INST_CFG="${N_XAHAUD_INSTALLER_CFG:-$N_XAHAUD_PREFIX/etc/xahaud.cfg}"
+mkdir -p "$(dirname "$INST_CFG")"
+if [ -L "$INST_CFG" ]; then
+  ln -sfn "$N_XAHAUD_CFG" "$INST_CFG"
+  ok "$INST_CFG -> $N_XAHAUD_CFG"
+elif [ -f "$INST_CFG" ]; then
+  cp -a "$INST_CFG" "${INST_CFG}.installer-default.bak"
+  ln -sfn "$N_XAHAUD_CFG" "$INST_CFG"
+  ok "replaced the installer's default config with a symlink -> $N_XAHAUD_CFG"
+  info "its original is kept at ${INST_CFG}.installer-default.bak"
 else
-  warn "$N_XAHAUD_PREFIX/etc/xahaud.cfg exists and is a real file — leaving it. The repo's config is $N_XAHAUD_CFG."
+  ln -sfn "$N_XAHAUD_CFG" "$INST_CFG"
+  ok "$INST_CFG -> $N_XAHAUD_CFG"
 fi
+# Re-running the installer to update the binary will NOT clobber this: it only
+# writes a default when the config file is absent, and a symlink satisfies -f.
 
 # ── 5. systemd drop-in ──────────────────────────────────────────────────────
 hdr "5. systemd"

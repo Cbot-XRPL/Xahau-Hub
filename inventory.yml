@@ -64,6 +64,26 @@ cluster:
       VMID 100 on pve2 is the local Claude repo builder VM (400 GiB) and VMID
       100 on pve is NPM; both are off limits to provisioning scripts here.
 
+  # ── How a node finds the network at all ──────────────────────────────────
+  #  [ips_fixed] does double duty in xahaud: it is how cluster members pin
+  #  each other, AND how a brand-new node reaches the Xahau overlay for the
+  #  first time. The spec only described the cluster half, which is a trap —
+  #  the first node has no cluster peers by definition, so it renders an empty
+  #  [ips_fixed] and sits at server_state: disconnected with peers: 0 forever,
+  #  looking like a firewall problem.
+  #
+  #  This value is the one Xahau's own installer ships as its default.
+  bootstrap_peers:
+    - "bacab.alloy.ee 21337"
+
+  # xahaud keeps its own time sync independent of chrony. Consensus is
+  # time-sensitive; a node with a skewed clock is a node that misbehaves
+  # subtly rather than obviously.
+  sntp_servers:
+    - time.cloudflare.com
+    - time.google.com
+    - pool.ntp.org
+
   # ── Ports. Admin is 127.0.0.1-only and is NEVER proxied. ──────────────────
   ports:
     rpc_admin: 5005                 # 127.0.0.1 ONLY
@@ -78,6 +98,38 @@ cluster:
     tls: terminated-at-proxy
     proxied_ports: [6006, 5007]
 
+  # ── Monitoring dashboard (dashboard/). READ ONLY, LAN only. ───────────────
+  #  Runs as a systemd unit INSIDE a node VM and answers GET on that node's
+  #  address. NOT behind the proxy and NOT exposed publicly: it shows
+  #  operational detail and has no authentication.
+  monitoring:
+    enabled: true
+    service: xah-dashboard
+
+    # ── WHERE THE DASHBOARD RUNS ─────────────────────────────────────────────
+    #  In a VM. NEVER on the Proxmox host: the host stays clean, and a
+    #  monitoring service is exactly the kind of thing that accretes packages,
+    #  units and open ports on a box that should only run guests. The collector
+    #  refuses to start if it detects a PVE host, and dashboard/install.sh
+    #  refuses a target that resolves to cluster.host.
+    #
+    #  It runs ON a node rather than on the ai-hub ops box for one practical
+    #  reason: a node gives us root, so the unit is installed, enabled and
+    #  survives reboot with no human in the loop. ai-hub would need an
+    #  interactive sudo password every time.
+    #
+    #  The cost is honest: if this node is down, its own dashboard is down with
+    #  it. The fix is not a third box, it is a SECOND instance — once
+    #  xah-node-2 exists, install there too (monitoring.node accepts one name;
+    #  run install.sh --node xah-node-2 as well). Each instance probes itself
+    #  locally and its peer over ssh, so either one can tell you the other died.
+    node: xah-node-1
+    peers: true                     # probe the other enabled nodes over ssh too
+
+    bind: 0.0.0.0                   # inside the guest; the LAN reaches the node
+    port: 8088                      # collides with nothing xahaud binds
+    refresh_s: 20                   # collector interval; the page polls faster
+
   # ── VM defaults applied by provision/10-create-vm.sh ──────────────────────
   defaults:
     ostype: l26
@@ -86,9 +138,12 @@ cluster:
     onboot: 1
     scsihw: virtio-scsi-single
     bridge: vmbr0
-    gateway: 192.168.1.1
+    # VERIFIED 2026-09-13 against pve2 and ai-hub: the LAN gateway is .254,
+    # not .1. provision/02-net-check.sh confirms it ARPs before any VM is
+    # created that depends on it.
+    gateway: 192.168.1.254
     netmask_cidr: 24
-    nameservers: "1.1.1.1 9.9.9.9"
+    nameservers: "192.168.1.254 1.1.1.1 9.9.9.9"
     disk_opts: "iothread=1,discard=on,ssd=1"
     guest_os: "ubuntu-24.04-lts"
     iso: "local:iso/ubuntu-24.04.3-live-server-amd64.iso"
@@ -105,7 +160,15 @@ cluster:
     xahaud_cfg: /etc/opt/xahaud/xahaud.cfg
     xahaud_log_dir: /var/log/xahaud
     xahaud_service: xahaud
-    installer_url: "https://raw.githubusercontent.com/Xahau/xahaud/dev/release-builds/xahaud-install-update.sh"
+    # VERIFIED 2026-09-13. It lives in Xahau/mainnet-docker, NOT Xahau/xahaud
+    # (that path 404s). Re-check the hash when you deliberately update:
+    #   curl -fsSL <url> | sha256sum
+    installer_url: "https://raw.githubusercontent.com/Xahau/mainnet-docker/main/xahaud-install-update.sh"
+    installer_sha256: "fd89358832a36e08f761f2d469cbe063d873ffde25c79e122ecaa0ff3586a534"
+    # The installer writes its own config at $prefix/etc/xahaud.cfg and points
+    # ExecStart there. We replace that file with a symlink to xahaud_cfg so
+    # there is exactly ONE config, whichever path is used to reach it.
+    xahaud_installer_cfg: /opt/xahaud/etc/xahaud.cfg
     ops_dir: /opt/xahau-hub
     db_mount: /var/lib/xahaud
     db_label: xahdb
