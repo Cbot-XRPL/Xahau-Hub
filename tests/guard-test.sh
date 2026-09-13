@@ -111,16 +111,38 @@ fi
 rm -rf /tmp/goodrender
 
 printf '\n── the dashboard does not live on the Proxmox host ─────────────\n'
+# Point the monitoring node's ADDRESS at the Proxmox host and confirm
+# install.sh refuses. Testing by setting monitoring.node to "pve2" would pass
+# for the wrong reason — resolve_node rejects any name that is not a declared
+# node, so it would never reach the containment guard being tested.
+PVE_ADDR="$("$INV" get cluster.host.address)"
 BADINV="$(mktemp)"
-sed -E 's/^(    host: )ai-hub/\1pve2/; s/^(    host_address: )192\.168\.1\.66/\1192.168.1.120/' \
-  "$XAH_REPO_ROOT/inventory.yml" > "$BADINV"
-refuses "installing the dashboard on pve2" \
+python3 - "$XAH_REPO_ROOT/inventory.yml" "$PVE_ADDR" > "$BADINV" <<'PYEOF'
+import re, sys
+src, pve = sys.argv[1], sys.argv[2]
+out, in_node = [], False
+for line in open(src):
+    if re.match(r"^  - name: xah-node-1\s*$", line):
+        in_node = True
+    elif re.match(r"^  - name: ", line):
+        in_node = False
+    if in_node and re.match(r"^    address: ", line):
+        line = "    address: %s\n" % pve
+    out.append(line)
+sys.stdout.write("".join(out))
+PYEOF
+refuses "installing the dashboard on a node whose address IS the hypervisor" \
   env XAH_INVENTORY="$BADINV" "$XAH_REPO_ROOT/dashboard/install.sh" --status
-allows  "monitoring.host is a VM, not the host" bash -c '
-  h=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.monitoring.host)
-  p=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.host.name)
-  [ "$h" != "$p" ]'
 rm -f "$BADINV"
+
+# And the configured target must be a real, declared node — not the host.
+allows "monitoring.node names a declared node" bash -c '
+  n=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.monitoring.node)
+  [ -n "$n" ] && "$XAH_REPO_ROOT/lib/inventory.py" nodes --field name | grep -qx "$n"'
+allows "monitoring.node is not the Proxmox host" bash -c '
+  n=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.monitoring.node)
+  h=$("$XAH_REPO_ROOT/lib/inventory.py" get cluster.host.name)
+  [ -n "$n" ] && [ "$n" != "$h" ]'
 
 printf '\n── host-side scripts refuse to run off-host ────────────────────\n'
 if [ "$(hostname -s)" != "$("$INV" get cluster.host.name)" ]; then

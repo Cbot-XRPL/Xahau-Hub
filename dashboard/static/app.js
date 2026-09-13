@@ -135,8 +135,6 @@ function stageBlock(stage, showSteps) {
 function nodeStatus(n) {
   if (n.guard_blocked) return ['blocked', 'crit'];
   if (!n.enabled) return [`phase ${n.phase}`, 'neutral'];
-  if (n.vm && n.vm.status === 'absent') return ['not created', 'neutral'];
-  if (n.vm && n.vm.status !== 'running') return [n.vm.status, 'crit'];
   if (!n.reachable) return ['unreachable', 'crit'];
   const st = n.ledger && n.ledger.server_state;
   if (n.done && n.done.synced) return [st || 'synced', 'ok'];
@@ -147,7 +145,8 @@ function nodeStatus(n) {
 
 function nodeCard(n) {
   const [chipText, chipTone] = nodeStatus(n);
-  const sub = `${n.role} · vmid ${n.vmid} · ${n.address}`;
+  const sub = `${n.role} · vmid ${n.vmid} · ${n.address}`
+    + (n.enabled ? (n.is_self ? ' · read locally' : ' · via ssh') : '');
   const body = [];
 
   body.push(alerts(n.errors, 'crit'));
@@ -211,59 +210,59 @@ function nodeCard(n) {
     ]));
   } else {
     body.push(kvRows([
-      ['VM state', n.vm ? n.vm.status : '—', n.vm && n.vm.status === 'running' ? null : 'dim'],
+      ['Probe', n.is_self ? 'local (failed)' : `ssh ${n.address}`, 'dim'],
       ['vCPU / RAM', `${n.spec.vcpu} / ${num(n.spec.ram_mb / 1024, 0)} GiB`],
       ['Root / DB', `${gib(n.spec.root_gib, 0)} / ${gib(n.spec.db_gib, 0)}`],
     ]));
+    body.push(h('p', { class: 'note', text:
+      'Observed from inside the cluster. This dashboard does not query the '
+      + 'hypervisor, so it cannot tell you whether the VM itself is powered on — '
+      + 'check the Proxmox UI for that.' }));
   }
 
   return card(n.name, sub, chipText, chipTone, body);
 }
 
-/* ── host card ────────────────────────────────────────────────────────── */
-function hostCards(s) {
-  const host = s.host || {};
+/* ── cluster + collector cards ────────────────────────────────────────── */
+function clusterCards(s) {
+  const c = s.cluster || {};
+  const col = s.collector || {};
+  const ports = c.ports || {};
+  const proxy = c.proxy || {};
   const out = [];
-  if (!host.reachable) {
-    return [card(host.name || 'host', host.address || '', 'unreachable', 'crit',
-      [alerts([host.error || 'The Proxmox host did not answer the probe.'], 'crit')])];
-  }
 
-  const pool = host.pool || {};
-  const body = [];
-  if (pool.data_pct !== null && pool.data_pct !== undefined) {
-    body.push(meter(`Thin pool ${pool.name} — data`, pool.data_pct, `${num(pool.data_pct, 2)}%`,
-      `${gib(pool.size_gib, 0)} physical · ${gib(pool.reserve_gib, 0)} reserved, never provisioned`,
-      pool.warn_pct, pool.crit_pct));
-  }
-  if (pool.meta_pct !== null && pool.meta_pct !== undefined) {
-    body.push(meter('Thin pool — metadata', pool.meta_pct, `${num(pool.meta_pct, 2)}%`, null,
-      pool.warn_pct, pool.crit_pct));
-  }
-  if (host.mem) {
-    body.push(meter('Memory', host.mem.pct, `${num(host.mem.pct, 0)}%`,
-      `${gib(host.mem.used_gib)} of ${gib(host.mem.total_gib, 0)}`, 85, 95));
-  }
-  body.push(kvRows([
-    ['Proxmox', host.pve_version || '—'],
-    ['Kernel', host.kernel || '—'],
-    ['Uptime', dur(host.uptime_s)],
-    ['Load', host.load && host.load.length ? host.load.map((x) => num(x, 2)).join('  ') : '—'],
-    ['CPU threads', num(host.cpus)],
+  out.push(card(c.name || 'cluster',
+    `${c.network || '—'} · network id ${c.network_id || '—'} · phase ${c.phase || '—'}`,
+    `${c.nodes_enabled || 0}/${c.nodes_total || 0} nodes live`,
+    c.nodes_enabled ? 'ok' : 'neutral',
+    [kvRows([
+      ['Peer port', num(ports.peer)],
+      ['Public WS', `${num(ports.ws_public)} · via proxy`],
+      ['Public RPC', `${num(ports.rpc_public)} · via proxy`],
+      ['Admin RPC', `${num(ports.rpc_admin)} · 127.0.0.1 only`, 'ok'],
+      ['TLS', proxy.tls || '—'],
+      ['Proxy', proxy.kind || '—'],
+      ['Database capped at', gib(c.db_cap_gib, 0)],
+      ['Database in use', gib(c.db_used_gib)],
+    ])]));
+
+  // Where this dashboard lives. Stated explicitly because it is a containment
+  // property, not a detail: nothing of ours runs on the hypervisor.
+  out.push(card('Collector', 'where this dashboard runs', 'in a VM', 'ok', [
+    kvRows([
+      ['Running in', col.node || col.hostname || '—'],
+      ['Own node', col.node ? 'read locally, no ssh' : 'n/a'],
+      ['Peer nodes', 'read over guarded ssh'],
+      ['Reads the hypervisor', col.reads_hypervisor ? 'yes' : 'no', 'ok'],
+    ]),
+    h('p', { class: 'note', text:
+      'This service is a systemd unit inside a node VM. It is deliberately NOT '
+      + 'installed on the Proxmox host: pve2 also runs guests this repo does not '
+      + 'own, so it keeps no packages, units, crons or open ports there. Thin '
+      + 'pool figures come from `make growth MODE=host`, which stages itself on '
+      + 'the host for one command and deletes itself again.' }),
   ]));
-  out.push(card(host.name, `${host.address} · ${pool.storage_id || ''}`, 'online', 'ok', body));
 
-  const guests = host.guests || [];
-  if (guests.length) {
-    out.push(card('Guests on this host', `${guests.length} defined`, 'read-only', 'info', [
-      kvRows(guests.map((g) => [
-        `${g.vmid} · ${g.name}`,
-        g.status,
-        g.status === 'running' ? 'ok' : 'dim',
-      ])),
-      h('p', { class: 'note', text: 'Guests not listed in inventory.yml are never touched by this repo.' }),
-    ]));
-  }
   return out;
 }
 
@@ -279,7 +278,8 @@ function overview(s) {
   const used = nodes.reduce((a, n) => a + ((n.db && n.db.used_gib) || 0), 0);
   const cap = nodes.reduce((a, n) => a + ((n.spec && n.spec.db_gib) || 0), 0);
 
-  const pool = (s.host && s.host.pool) || {};
+  const peers = nodes.map((n) => n.ledger && n.ledger.peers).filter((v) => v !== null && v !== undefined);
+  const topPeers = peers.length ? Math.max(...peers) : null;
 
   return [
     tile('Nodes synced', `${synced}/${nodes.length}`, null,
@@ -291,10 +291,9 @@ function overview(s) {
     tile('Database in use', num(used, 1), 'GiB',
       cap ? `of ${num(cap, 0)} GiB capped` : null,
       cap ? tone((used / cap) * 100, 60, 80) : 'neutral'),
-    tile('Thin pool', pool.data_pct === null || pool.data_pct === undefined ? '—' : num(pool.data_pct, 1),
-      pool.data_pct === null || pool.data_pct === undefined ? null : '%',
-      pool.size_gib ? `${gib(pool.size_gib, 0)} physical` : null,
-      tone(pool.data_pct, pool.warn_pct, pool.crit_pct)),
+    tile('Peers', topPeers === null ? '—' : num(topPeers), null,
+      topPeers === null ? 'no node answering RPC' : 'connected to the network',
+      topPeers === null ? 'neutral' : topPeers >= 5 ? 'ok' : 'warn'),
   ];
 }
 
@@ -313,7 +312,7 @@ function render(s) {
 
   el('tiles').replaceChildren(...overview(s));
   el('nodes').replaceChildren(...(s.nodes || []).map(nodeCard));
-  el('host').replaceChildren(...hostCards(s));
+  el('cluster').replaceChildren(...clusterCards(s));
 
   const g = s.guard || {};
   el('footer').replaceChildren(
