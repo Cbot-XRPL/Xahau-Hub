@@ -44,9 +44,20 @@ cluster:
       - r730
     host_addresses:
       - 192.168.1.121               # pve (R730xd) — ADJUST IF WRONG, never remove
+    # Never a provisioning target, on any host.
     vmids:
-      - 100                         # CT 100 on pve — Nginx Proxy Manager
+      - 100                         # CT 100 on pve = NPM; VM 100 on pve2 = ai-hub.
+                                    # Both off limits. Refusing 100 protects the
+                                    # 400 GiB builder VM from ever being clobbered.
       - 200                         # CT 200 on pve — UNL VALIDATOR. NEVER TOUCH.
+
+    # A DIFFERENT question: which VMIDs, if they exist on the machine a
+    # host-side script is standing on, prove it is the WRONG machine?
+    # Only the validator. VMID 100 exists legitimately on pve2 (ai-hub), so it
+    # cannot be used as evidence of being on pve — that is a false positive
+    # that blocks all provisioning.
+    tripwire_vmids:
+      - 200
     reason: >-
       CT 200 on pve (R730xd) is the production UNL validator. It has its own
       storage and its own validator/node keys. This repo must never touch it.

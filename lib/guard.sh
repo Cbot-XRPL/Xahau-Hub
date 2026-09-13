@@ -27,6 +27,11 @@ _guard_list() { "$INV" get "cluster.forbidden.$1" 2>/dev/null | tr -d '[]"' | tr
 guard_forbidden_hosts()     { _guard_list hosts; }
 guard_forbidden_addresses() { _guard_list host_addresses; }
 guard_forbidden_vmids()     { _guard_list vmids; }
+# Presence of these on the local node proves we are on the wrong machine.
+# Deliberately NOT the same list as forbidden vmids: VMID 100 is a legitimate
+# guest on pve2 (ai-hub), so its existence says nothing about which host we are
+# on, while VMID 200 is the validator and says everything.
+guard_tripwire_vmids()      { _guard_list tripwire_vmids; }
 
 # ── guard_reject_target <string...> ──────────────────────────────────────────
 #  Refuse if any argument names a forbidden host, address, or VMID. Call this
@@ -85,9 +90,9 @@ guard_require_host() {
   while read -r f; do
     [ -z "$f" ] && continue
     if [ -e "/etc/pve/lxc/$f.conf" ] || [ -e "/etc/pve/qemu-server/$f.conf" ]; then
-      die "GUARD TRIPWIRE: guest $f exists on this node ($me). That should be impossible on '$expect' and strongly suggests this is the validator host. Refusing to continue."
+      die "GUARD TRIPWIRE: guest $f exists on this node ($me). $f is the UNL validator and must not be on '$expect' — this strongly suggests the script is standing on the validator host. Refusing to continue."
     fi
-  done <<< "$(guard_forbidden_vmids)"
+  done <<< "$(guard_tripwire_vmids)"
 
   local a
   while read -r a; do

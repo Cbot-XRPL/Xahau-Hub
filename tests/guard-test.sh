@@ -38,7 +38,14 @@ refuses "anything named unl"          guard_reject_target unl-node
 
 printf '\n── forbidden VMIDs ─────────────────────────────────────────────\n'
 refuses "vmid 200 (UNL validator)"    guard_vmid 200
-refuses "vmid 100 (NPM / builder VM)" guard_vmid 100
+refuses "vmid 100 (NPM on pve / ai-hub on pve2)" guard_vmid 100
+
+# The tripwire list is deliberately narrower than the forbidden list. VMID 100
+# exists legitimately on pve2 (ai-hub), so treating its presence as proof of
+# being on the validator host is a false positive that blocks all provisioning.
+allows  "tripwire list excludes 100"  bash -c '! "$XAH_REPO_ROOT/lib/inventory.py" get cluster.forbidden.tripwire_vmids | grep -q 100'
+allows  "tripwire list includes 200"  bash -c '"$XAH_REPO_ROOT/lib/inventory.py" get cluster.forbidden.tripwire_vmids | grep -q 200'
+allows  "forbidden list still has 100" bash -c '"$XAH_REPO_ROOT/lib/inventory.py" get cluster.forbidden.vmids | grep -q 100' 
 refuses "an undeclared vmid"          guard_vmid 999
 refuses "a non-numeric vmid"          guard_vmid abc
 
@@ -112,6 +119,11 @@ else
 fi
 
 printf '\n── git will not commit secrets ─────────────────────────────────\n'
+# A deployed copy (rsynced to a host or a node) has no .git, so check-ignore
+# cannot run there. That is not a guard failure — skip rather than fail red.
+if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf '  ..    skipped (not a git work tree — deployed copy)\n'
+else
 mkdir -p "$REPO_ROOT/secrets"
 printf 'X=1\n' > "$REPO_ROOT/secrets/.gitignore-probe"
 allows "git ignores secrets/"        git -C "$REPO_ROOT" check-ignore -q "$REPO_ROOT/secrets/.gitignore-probe"
@@ -119,6 +131,7 @@ rm -f "$REPO_ROOT/secrets/.gitignore-probe"
 mkdir -p "$REPO_ROOT/out/probe"; printf 'X\n' > "$REPO_ROOT/out/probe/xahaud.cfg"
 allows "git ignores out/"            git -C "$REPO_ROOT" check-ignore -q "$REPO_ROOT/out/probe/xahaud.cfg"
 rm -rf "$REPO_ROOT/out/probe"
+fi
 
 printf '\n%s\n' "$(printf '─%.0s' $(seq 1 64))"
 printf '%d passed, %d failed\n\n' "$PASS" "$FAIL"
