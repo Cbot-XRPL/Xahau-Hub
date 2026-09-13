@@ -49,7 +49,8 @@ make guards      # 35 assertions. Fails the build if a guard stops refusing.
 | **Storage** | PERC H740P RAID 10, VD0 1905.5 GB · `local-lvm` thin pool, 1752 GiB |
 | **Provisioned** | 1496 GiB of 1752 GiB — **~256 GiB unprovisioned reserve, no overcommit** |
 | **GB per million ledgers** | **NOT YET MEASURED** — `make measure NODE=xah-node-1` |
-| **Public path** | Cloudflare Tunnel `onexah` → NPM `192.168.1.176` → node |
+| **Public endpoint** | **LIVE** — `https://cluster.cbotlabs.xyz` (RPC) · `wss://ws-cluster.cbotlabs.xyz` (WS) |
+| **Public path** | Cloudflare Tunnel `onexah` → **direct to xah-node-2**. NPM is not in the path. |
 | **WAN IP static?** | **MOOT** — a tunnel dials out; the WAN IP is never published |
 | **Upload bandwidth** | **UNKNOWN — still the open question before going public** |
 
@@ -59,7 +60,20 @@ does not settle is **upload**. A public WS endpoint serving subscriptions is
 upload-heavy, and the tunnel carries that traffic over the same home
 connection. Measure it before telling anyone to put this in an app config.
 
-See `proxy/npm-notes.md` for the full path and the exact NPM/Cloudflare config.
+Verified end to end 2026-09-13: `server_info`, `fee`, `ledger`, `ledger_current`,
+`ledger_closed`, `account_info`, `account_tx` and `ping` all return `success`
+over the public name; the WebSocket upgrades to `101` and pushes live
+`ledgerClosed` events; `can_delete` and `stop` return **403**, and the admin
+port refuses connections from the network.
+
+NPM was removed from the path deliberately — it builds a TLS server block only
+once a hostname has a certificate, and an HTTP-01 challenge cannot reach a
+hostname that has no server block, so a new tunnel-fronted hostname can never
+obtain one. xahaud needs none of NPM's features, so the tunnel routes straight
+to the node and Cloudflare terminates TLS.
+
+See `proxy/npm-notes.md` for the full path and the failure modes that cost the
+most time.
 
 ### Node inventory
 
