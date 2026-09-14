@@ -28,9 +28,18 @@ peers_max: 40
 #
 #  ~400k ledgers is roughly 16 days at ~3.5s per ledger. Raise it only with
 #  the arithmetic redone: on the 4 TB NVMe this becomes ~4 million.
-online_delete: 500000
-ledger_history: 400000
-ledger_history_initial: 400000
+#  CORRECTED 2026-09-14 after reading state.db. online_delete is a ROTATION
+#  INTERVAL, not a window size. xahaud keeps a writable and an archive backend
+#  and frees space only when it DROPS the archive — which happens one full
+#  interval after that data stopped being written. So the disk must hold
+#  2 x online_delete, not 1x. Observed directly: writable 167 GB, archive 12 KB.
+#
+#  150,000 x 2 = 300,000 ledgers x 992 GiB/million = ~298 GiB = 43% of 700 GiB.
+#  Served history therefore ranges from 150,000 to 300,000 ledgers — roughly
+#  6 to 12 days. That is what 700 GiB buys at the measured rate.
+online_delete: 150000
+ledger_history: 130000
+ledger_history_initial: 130000
 
 advisory_delete: 1                 # nothing prunes until can_delete is called
 use_tx_tables: 1                   # account_tx depends on it. NEVER disable.

@@ -320,9 +320,28 @@ nodes:
     db_storage: local-lvm
     ssh_user: root
     seed_var: XAH_NODE_2_SEED
+
+    # ── TEMPORARY OVERRIDE — remove once this node has shed ─────────────────
+    #  Node fields win over the role file, so these two beat config/roles/api.yml.
+    #
+    #  This node backfilled ~232,000 ledgers into its WRITABLE backend while
+    #  the archive stayed empty, so it is holding 236 GB of a 300 GiB volume
+    #  with nothing droppable. At the role's 90,000 it would not rotate for
+    #  2.7 days and would hit the cap first.
+    #
+    #  20,000 is below the 22,266 ledgers already elapsed since lastRotated
+    #  (25,767,981), so rotation ONE fires immediately: the 236 GB writable
+    #  becomes the archive. Rotation TWO, ~19h later, drops it. Peak in
+    #  between is ~257 GB (80%), then it falls to ~21 GB.
+    #
+    #  Then delete these two lines and redeploy to pick up the role's 90,000.
+    online_delete: 20000
+    ledger_history: 18000
+    ledger_history_initial: 18000
+
     notes: >-
-      General API node. Seeded from node 1 via ops/seed-node.sh, never
-      backfilled independently from the network. Primary public upstream.
+      General API node. Primary public upstream. Currently shedding an
+      oversized backfill — see the temporary override above.
 
   # ── PHASE 2 — after the 384 GB RAM upgrade and the 4 TB NVMe. ─────────────
   #    Set enabled: true and follow docs/PHASE-2.md. Nothing else changes.

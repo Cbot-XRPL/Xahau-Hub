@@ -92,17 +92,39 @@ if [ "$AVAIL_G" -lt 20 ]; then
   alert CRIT "$NODE: only ${AVAIL_G} GiB free on $MOUNT. A rotation may not have room to complete. Lower prune_trigger_pct in inventory.yml and/or raise the cap (lvextend + xfs_growfs). See docs/RUNBOOK.md."
 fi
 
+# ── NEVER use can_delete "now" ──────────────────────────────────────────────
+# Measured on xahaud 2026.6.21: `can_delete now` sets the permission to the
+# LAST ROTATED ledger, not to the current validated one. It returns
+# {"can_delete":<lastRotated>,"status":"success"} — a success, having changed
+# nothing. Rotation needs canDelete >= lastRotated + online_delete, so "now"
+# can never satisfy it and this script fired a no-op every two hours for a day
+# while the volume filled.
+#
+# Passing the validated sequence explicitly is what actually grants it.
+VALIDATED="$(rpc_field "$SI" info.validated_ledger.seq 2>/dev/null || true)"
+if [ -z "$VALIDATED" ]; then
+  err "cannot read validated_ledger.seq — refusing to guess at a deletion boundary"
+  alert CRIT "$NODE: prune-guard could not determine the validated ledger; nothing pruned at ${USE}% disk"
+  exit 1
+fi
+info "granting deletion up to validated ledger $VALIDATED"
+
 START="$(date +%s)"
-OUT="$(rpc_local can_delete '{"can_delete":"now"}' || true)"
+OUT="$(rpc_local can_delete "{\"can_delete\":$VALIDATED}" || true)"
 if [ -z "$OUT" ]; then
   # older builds take it positionally through the binary's RPC client
-  OUT="$("$N_XAHAUD_BIN" --silent --conf "$N_XAHAUD_CFG" can_delete now 2>&1 || true)"
+  OUT="$("$N_XAHAUD_BIN" --silent --conf "$N_XAHAUD_CFG" can_delete "$VALIDATED" 2>&1 || true)"
 fi
 ELAPSED=$(( $(date +%s) - START ))
 
 CAN_DELETE="$(rpc_field "$OUT" can_delete 2>/dev/null || true)"
-if rpc_ok "$OUT" || [ -n "$CAN_DELETE" ]; then
-  ok "can_delete accepted (can_delete=${CAN_DELETE:-?}) in ${ELAPSED}s"
+# "status":"success" is not evidence. The no-op above returns exactly that.
+# The question is whether the permission moved to where we asked.
+if [ -n "$CAN_DELETE" ] && [ "$CAN_DELETE" -lt "$VALIDATED" ] 2>/dev/null; then
+  err "can_delete reported success but only granted up to $CAN_DELETE (asked for $VALIDATED)"
+  alert CRIT "$NODE: can_delete did not advance — granted $CAN_DELETE, needed $VALIDATED. Pruning is NOT happening despite a success reply."
+elif rpc_ok "$OUT" || [ -n "$CAN_DELETE" ]; then
+  ok "can_delete granted up to ${CAN_DELETE:-?} in ${ELAPSED}s"
 else
   err "can_delete did not report success:"
   printf '%s\n' "$OUT" | head -20 >&2
@@ -125,8 +147,17 @@ AFTER_CL="$(rpc_field "$SI2" info.complete_ledgers 2>/dev/null || echo '?')"
 
 info "after: use=${AFTER_USE}% complete_ledgers=$AFTER_CL"
 cat >&2 <<'NOTE'
-  Rotation does not free space instantly — space comes back when the old
-  archive backend is dropped. Watch the next few growth-watch runs.
+  Rotation does not free space instantly, and the reason is worth knowing:
+
+  * xahaud keeps a writable backend and an archive. Rotation makes the
+    writable the new archive; space returns only at the NEXT rotation, when
+    that archive is dropped. So the volume must hold 2 x online_delete.
+  * It deletes SQLite rows first, 100 at a time, before touching NuDB. On a
+    70 GB transaction.db that is hours. The node stays responsive throughout
+    (measured: 18-22ms, zero failed requests).
+  * SQLite returns freed pages to its own free list, NOT to the filesystem.
+    transaction.db does not shrink without `xahaud --vacuum`; it stops
+    growing instead. Treat its size as a high-water mark.
 
   THREE THINGS TO VERIFY ON THE FIRST REAL ROTATION (record in DECISIONS.md):
     1. how much transient space the rotation actually consumed

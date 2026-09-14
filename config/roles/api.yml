@@ -16,9 +16,13 @@ peers_max: 30
 #  150,000 x 991.33 GiB/million = ~149 GiB = 50% of the 300 GiB cap.
 #  Roughly 6 days at ~3.5s per ledger, which still covers the overwhelming
 #  majority of real queries. Deep requests route to xah-node-1.
-online_delete: 200000
-ledger_history: 150000
-ledger_history_initial: 150000
+#  CORRECTED 2026-09-14: online_delete is a rotation INTERVAL, so the volume
+#  must hold 2 x it (writable + archive). See config/roles/deep.yml.
+#  90,000 x 2 = 180,000 ledgers = ~179 GiB = 60% of the 300 GiB cap.
+#  Served history 90,000-180,000 ledgers, roughly 3.6 to 7 days.
+online_delete: 90000
+ledger_history: 80000
+ledger_history_initial: 80000
 
 advisory_delete: 1
 use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
