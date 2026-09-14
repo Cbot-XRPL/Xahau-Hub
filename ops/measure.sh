@@ -92,10 +92,13 @@ printf '  %-24s %s\n' "volume used (df)" "$(numfmt --to=iec --suffix=B "$DF_USED
 printf '  %-24s %s GiB\n' "cap" "$N_DB_GIB"
 
 # ── the number ─────────────────────────────────────────────────────────────
+# NB: the awk printf MUST end in \n. Without it `read` hits EOF, returns 1,
+# and under `set -E` the ERR trap fires — reporting a crash for a calculation
+# that in fact completed and assigned every variable.
 read -r GB_PER_M NUDB_PER_M SQL_PER_M FULL_FIT HEADROOM_M < <(awk -v t="$TOTAL_B" -v n="$NUDB_B" -v s="$SQL_B" -v r="$RANGE" -v cap="$CAP_B" 'BEGIN{
   m=r/1000000.0; g=1073741824.0;
   tpm=(t/g)/m; npm=(n/g)/m; spm=(s/g)/m;
-  printf "%.2f %.2f %.2f %.2f %.2f", tpm, npm, spm, (cap/g)/tpm, ((cap/g)-(t/g))/tpm;
+  printf "%.2f %.2f %.2f %.2f %.2f\n", tpm, npm, spm, (cap/g)/tpm, ((cap/g)-(t/g))/tpm;
 }')
 
 hdr "GB PER MILLION LEDGERS"

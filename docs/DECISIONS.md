@@ -4,10 +4,9 @@ Why this is built the way it is, and what is still unknown. Anything marked
 **VERIFY** is a claim that must be replaced with a measurement before it is
 relied on.
 
-> **MEASUREMENT PENDING** — GB per million ledgers has not been measured yet.
-> Run `make measure NODE=xah-node-1` once node 1 reports a stable
-> `complete_ledgers` range, then `ops/measure.sh --record`. Every sizing
-> decision below that says "unknown" resolves the moment that number exists.
+> **MEASURED 2026-09-14: ~992 GiB per million ledgers.** Both nodes agree
+> independently (991.88 and 991.33). See "The measurement" at the end — it
+> invalidates every ledger_history and online_delete value in this document.
 
 ---
 
@@ -356,3 +355,71 @@ config nobody reads.
 ## Measurements
 
 *Appended by `ops/measure.sh --record`. Nothing here yet.*
+
+
+---
+
+## The measurement
+
+Taken 2026-09-14 on both nodes, ~21h into backfill. They agree to within
+0.06%, which is the useful part — one number could be an artefact of one
+node's history, two independent agreeing numbers are the cost of the data.
+
+| | xah-node-1 (deep) | xah-node-2 (api) |
+|---|---|---|
+| range | 231,755 ledgers | 230,800 ledgers |
+| nudb | 158 GB | 157 GB |
+| transaction.db | 72 GB | 72 GB |
+| db/ total | 230 GB | 229 GB |
+| **GiB per million** | **991.88** | **991.33** |
+| — NuDB share | 681.80 (69%) | 681.48 |
+| — SQLite share | 309.90 (31%) | 309.73 |
+
+### What this invalidates
+
+Every history setting in this repo was written before the number existed, and
+all of them are between 1.7x and 5.7x too large for their volume:
+
+| node | setting | ledgers | needs | cap | |
+|---|---|---|---|---|---|
+| node 1 | ledger_history (initial) | 2,000,000 | 1,984 GiB | 700 | **2.8x over** |
+| node 1 | ledger_history (target) | 3,500,000 | 3,472 GiB | 700 | **5.0x over** |
+| node 1 | online_delete | 4,000,000 | 3,968 GiB | 700 | **5.7x over** |
+| node 2 | ledger_history | 500,000 | 496 GiB | 300 | **1.7x over** |
+| node 2 | online_delete | 600,000 | 595 GiB | 300 | **2.0x over** |
+
+What the caps actually hold:
+
+| node | cap | full | at the 70% prune trigger |
+|---|---|---|---|
+| xah-node-1 | 700 GiB | 705,731 ledgers | **~494,000** |
+| xah-node-2 | 300 GiB | 302,456 ledgers | **~212,000** |
+
+### Why this is not an outage
+
+`advisory_delete=1` plus `prune-guard.sh` means the window self-limits at
+whatever the disk allows. Nothing breaks; the cap does its job.
+
+The cost is quieter: a node asked for more history than it can hold **fetches
+history in order to prune it**, forever. That is the exact failure the
+`ledger_history < online_delete` rule was written to prevent — but the binding
+constraint turns out not to be `online_delete`, it is the volume. Both nodes
+have been doing this since they started, which is also the most likely reason
+node 1 dips out of `full` ~97 times a day.
+
+### What full history would take
+
+Xahau is at ledger ~25.79M. At 992 GiB/million that is **~25 TB**. The 4 TB
+NVMe holds roughly 4 million ledgers — about 160 days at ~3.5s per ledger.
+Full history is not reachable on this hardware and a rolling window is the
+only option, which is what the spec assumed. It was right for a reason nobody
+had measured yet.
+
+### The SQLite share is 31%, and it is not small
+
+`transaction.db` alone is 72 GB of the 230 GB. The spec listed "whether online
+delete also trims transaction.db and ledger.db" as a thing to verify on first
+rotation. At roughly a third of total volume, that answer decides whether the
+cap is enforced by the mechanism we think it is — if `can_delete` frees NuDB
+but not SQLite, a third of the growth is unmanaged and the volume fills anyway.
+**Still unverified. Check it on the first rotation.**

@@ -85,7 +85,10 @@ parse_complete_ledgers() {
   local cl="${1:-}"
   cl="${cl##*,}"                       # last range if several
   case "$cl" in
-    *-*) printf '%s %s' "${cl%%-*}" "${cl##*-}" ;;
+    # Trailing newline matters: without it `read` hits EOF and returns 1 even
+    # though it assigned both variables, so a caller using `if ! read ...`
+    # reports a parse failure on a perfectly good range.
+    *-*) printf '%s %s\n' "${cl%%-*}" "${cl##*-}" ;;
     *)   : ;;
   esac
   return 0
