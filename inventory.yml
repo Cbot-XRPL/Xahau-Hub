@@ -255,6 +255,18 @@ cluster:
     db_label: xahdb
     db_fs: xfs
 
+  # ── MEASURED, not estimated ───────────────────────────────────────────────
+  #  GiB of database per million ledgers, measured 2026-09-14 on both nodes
+  #  (991.88 and 991.33, agreeing to 0.06%). `make check` uses this to refuse
+  #  a ledger_history that cannot physically fit its volume — the check that
+  #  would have caught every original value being 1.7x to 5.7x too large.
+  #  Re-measure after any major xahaud version change: ops/measure.sh.
+  measured:
+    gib_per_million: 992
+    measured_on: "2026-09-14"
+    nudb_share_pct: 69
+    sqlite_share_pct: 31
+
   # ── Growth / prune thresholds (see docs/DECISIONS.md) ─────────────────────
   thresholds:
     db_warn_pct: 60                 # growth-watch.sh warn

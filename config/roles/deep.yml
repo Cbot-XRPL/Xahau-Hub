@@ -15,9 +15,22 @@ role: deep
 node_size: huge
 peers_max: 40
 
-online_delete: 4000000
-ledger_history: 3500000
-ledger_history_initial: 2000000
+# ── SIZED FROM MEASUREMENT, 2026-09-14 ───────────────────────────────────────
+#  Measured on both nodes: ~992 GiB per million ledgers (991.88 / 991.33).
+#  The previous values (3.5M target, 2M initial, 4M online_delete) needed
+#  3.5 TB, 2 TB and 4 TB against a 700 GiB volume — 5.0x, 2.8x and 5.7x over.
+#
+#  400,000 ledgers x 991.88 GiB/million = ~397 GiB = 57% of the 700 GiB cap.
+#  That sits below the 60% warn threshold, so the node reaches a STEADY STATE
+#  bounded by ledger_history rather than by disk pressure. prune-guard goes
+#  back to being the safety net it was designed as, instead of the mechanism
+#  that was actually holding the line.
+#
+#  ~400k ledgers is roughly 16 days at ~3.5s per ledger. Raise it only with
+#  the arithmetic redone: on the 4 TB NVMe this becomes ~4 million.
+online_delete: 500000
+ledger_history: 400000
+ledger_history_initial: 400000
 
 advisory_delete: 1                 # nothing prunes until can_delete is called
 use_tx_tables: 1                   # account_tx depends on it. NEVER disable.

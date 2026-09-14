@@ -252,6 +252,34 @@ def check(doc):
         if isinstance(lhi, int) and isinstance(od, int) and lhi >= od:
             problems.append("role %s: ledger_history_initial (%d) must be < online_delete (%d)" % (role, lhi, od))
 
+    # ── does the requested history physically fit its volume? ────────────────
+    #  Every original value was 1.7x to 5.7x too large for its cap. Nothing
+    #  broke, because prune-guard silently capped the window — which is exactly
+    #  why it went unnoticed: the node just fetched history in order to prune
+    #  it, forever. This is the check that makes that impossible to ship again.
+    measured = (doc.get("cluster") or {}).get("measured") or {}
+    rate = measured.get("gib_per_million")
+    if rate:
+        warn_pct = int(dig(doc, "cluster.thresholds.db_warn_pct"))
+        for n in nodes:
+            if not n.get("enabled"):
+                continue
+            rc = role_config(doc, n["role"])
+            cap = int(n["db_gib"])
+            for key in ("ledger_history", "ledger_history_initial"):
+                ledgers = rc.get(key)
+                if not isinstance(ledgers, int):
+                    continue
+                need = ledgers / 1_000_000 * float(rate)
+                if need > cap:
+                    problems.append(
+                        "%s: %s=%s needs ~%.0f GiB at the measured %s GiB/million, but the volume is %d GiB (%.1fx over)"
+                        % (n["name"], key, f"{ledgers:,}", need, rate, cap, need / cap))
+                elif need > cap * warn_pct / 100.0:
+                    warnings.append(
+                        "%s: %s=%s fills %.0f%% of its %d GiB volume — above the %d%% warn line, so it will live in disk-pressure pruning rather than reaching a steady state"
+                        % (n["name"], key, f"{ledgers:,}", 100 * need / cap, cap, warn_pct))
+
     # ── no-overcommit math, phase 1 pool only ────────────────────────────────
     pool = int(host["pool_physical_gib"])
     reserve = int(host["reserve_gib"])

@@ -8,9 +8,17 @@ role: api
 node_size: large
 peers_max: 30
 
-online_delete: 600000
-ledger_history: 500000
-ledger_history_initial: 500000     # shallow enough to start at the final value
+# ── SIZED FROM MEASUREMENT, 2026-09-14 ───────────────────────────────────────
+#  ~992 GiB per million ledgers. The previous 500,000 needed 496 GiB against a
+#  300 GiB volume — 1.7x over, so this node was also fetching history only to
+#  prune it.
+#
+#  150,000 x 991.33 GiB/million = ~149 GiB = 50% of the 300 GiB cap.
+#  Roughly 6 days at ~3.5s per ledger, which still covers the overwhelming
+#  majority of real queries. Deep requests route to xah-node-1.
+online_delete: 200000
+ledger_history: 150000
+ledger_history_initial: 150000
 
 advisory_delete: 1
 use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
