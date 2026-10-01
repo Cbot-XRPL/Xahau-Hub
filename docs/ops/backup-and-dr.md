@@ -257,3 +257,80 @@ instead, because VM 103 and VM 107 had **no backups at all**.
 
 The IronWolf has 6.8 TiB free, so ~14 full copies at ~100 GiB cost 1.4 TiB. The
 previous `keep-last=2` was leaving far more space idle than it needed to.
+
+## Reclaiming the validator's dead blocks, with it live (2026-10-01)
+
+880 GiB came back. The `ssd` pool went from 12.93% to **1.07%** used, and
+`vm-200-disk-0` from 12.74% to 1.03% of its 7500 GiB. Pool metadata dropped too,
+2.32% to 0.47% — freeing chunks costs less metadata than tracking them. CT 200
+stayed up: `xahaud` is still PID 2344149 from 2026-09-29 09:59:41, at the same
+~53% CPU it ran at before.
+
+### Why this was safe, established before running it
+
+`/sys/block/sdb/queue/discard_max_bytes` is **0**. The PERC H730 virtual disk
+does not accept discards at all. The thin volumes above it advertise a 128 MiB
+discard granularity, so the LVM thin layer frees its chunks and then passes the
+discard down to a device that ignores it. The entire cost is thin metadata — no
+controller erase, no firmware discard path, nothing for the RAID card to chew
+through while a validator is trying to write.
+
+`fstrim` also never touches file data. It reads the filesystem's free-space map
+and tells the block layer which ranges are already unused. Corruption is not one
+of its failure modes; an I/O stall is the only real risk, and that was the thing
+to watch.
+
+Rehearsed first on CT 100 — same thin pool, same unprivileged LXC, 4 GiB
+instead of 7.3 TiB. 1.6 GiB trimmed in 2.1 s, pool 12.93% to 12.91%, metadata
+flat.
+
+### Use `pct fstrim`, and do not try to slice it
+
+A manual `fstrim -o <offset> -l <length> /var/lib/lxc/200/rootfs/` looks like a
+way to trim a huge filesystem in controlled slices. It does nothing. For a
+*running* container that host path is an empty directory — the real mount lives
+in the container's own namespace — so fstrim resolves to the host's root
+filesystem and exits in 4 ms with:
+
+    fstrim: /var/lib/lxc/200/rootfs/: the discard operation is not supported
+
+which is `pve-root` on `sda` correctly reporting that it has no discard support.
+Harmless, but it trims nothing. `pct fstrim <vmid>` enters the namespace
+properly and is the only correct path. It cannot be sliced.
+
+### So bound it with monitoring instead
+
+Run it in the background and watch the validator's CPU time advance, killing the
+trim if it ever stops. Interrupting `fstrim` is safe — it simply stops issuing
+further discards.
+
+    P=$(pgrep -o xahaud)                      # see the ps caveat below
+    pct fstrim 200 >/tmp/trim.log 2>&1 &
+    T=$!
+    # every 5s: compare utime+stime from /proc/$P/stat; two flat samples -> kill $T
+
+Across 260 seconds of trimming, `xahaud`'s tick counter advanced at every single
+5-second sample — lowest was +37, typical +250 to +500 — and the stall counter
+never left zero. The pool's `data_percent` falling steadily from 12.91 to 1.07
+doubles as a progress bar.
+
+### Three `ps` idioms that silently lie here
+
+Each of these quietly listed *every* process on the host instead of the one
+asked for, which turned a validator health check into a false "process changed"
+verdict:
+
+- `ps -eo pid,lstart -p $PID` — `-e` means "all processes" and overrides `-p`.
+  Drop the `-e`: `ps -o pid,lstart,etimes,%cpu,rss -p $PID`.
+- `pgrep -f /opt/xahaud/bin/xahaud` — returned nothing, leaving `ps -p ""`.
+- `ps -C xahaud --no-headers` — did not filter either.
+
+The form that works for finding it in the first place is
+`ps -eo pid,lstart,etimes,%cpu,rss,args | grep -E "[x]ahaud"`.
+
+### What it changes
+
+The `ssd` pool now has 7339 GiB free against 79 GiB used. CT 200 is still
+*provisioned* at 7500 GiB against 7419 GiB of physical pool, so the paper
+overcommit remains, but it is now backed by 1% real usage rather than 13%. There
+is no reason to grow that rootfs and every reason to leave it alone.
