@@ -104,6 +104,57 @@ allows "the real inventory still renders" \
   "$XAH_REPO_ROOT/config/render-config.sh" xah-node-1 --no-seed --out /tmp/okrender
 rm -rf "$BADINV2" /tmp/badrender /tmp/okrender
 
+echo
+echo "── the pool math counts volumes this repo did not create ────────"
+
+# The check used to hardcode ai-hub's 400 GiB as the only foreign allocation,
+# so building PBS (CT 113, 192 GiB) left it reporting headroom that was not
+# there. Every foreign volume must appear in the ledger and in the total.
+allows "every existing_allocation shows in the ledger" bash -c '
+  set -e; cd "$XAH_REPO_ROOT"
+  out="$(python3 lib/inventory.py check)"
+  for v in $(python3 lib/inventory.py get cluster.host.existing_allocations \
+             | grep -oE "vm-[0-9]+-disk-[0-9]+"); do
+    echo "$out" | grep -q "$v" || { echo "missing $v from the ledger"; exit 1; }
+  done'
+
+allows "provisioned total includes the existing allocations" bash -c '
+  set -e; cd "$XAH_REPO_ROOT"
+  python3 - <<PYMATH
+import sys, re, subprocess
+sys.path.insert(0, "lib")
+import inventory
+d = inventory.load()
+ex = sum(int(a["gib"]) for a in inventory.dig(d, "cluster.host.existing_allocations"))
+nodes = [n for n in inventory.dig(d, "nodes") if n.get("enabled")]
+pool = inventory.dig(d, "cluster.host.storage")
+nd = sum(int(n["root_gib"]) for n in nodes if n.get("storage") == pool) \
+   + sum(int(n["db_gib"]) for n in nodes if n.get("db_storage") == pool)
+out = subprocess.run([sys.executable, "lib/inventory.py", "check"],
+                     capture_output=True, text=True).stdout
+m = re.search(r"(\d+) GiB\s+TOTAL PROVISIONED", out)
+assert m, "no TOTAL PROVISIONED line"
+got, want = int(m.group(1)), ex + nd
+assert got == want, "check says %d GiB, allocations + nodes = %d GiB" % (got, want)
+PYMATH'
+
+# Overcommit is the operator's hard rule and stays fatal, unlike the softer
+# reserve target which only warns.
+refuses "an existing allocation that overcommits the pool" bash -c '
+  cd "$XAH_REPO_ROOT"
+  BAD="$(mktemp)"
+  python3 - "$BAD" <<PYBAD
+import sys
+src = open("inventory.yml").read()
+src = src.replace(
+    "    existing_allocations:\n",
+    "    existing_allocations:\n      - { volume: vm-999-disk-0, gib: 9000, owner: \"probe\" }\n",
+    1)
+open(sys.argv[1], "w").write(src)
+PYBAD
+  XAH_INVENTORY="$BAD" python3 lib/inventory.py check >/dev/null 2>&1
+  rc=$?; rm -f "$BAD"; exit $rc'
+
 refuses "admin RPC bound to 0.0.0.0" bash -c '
   set -e; cd "$XAH_REPO_ROOT"
   cp config/xahaud.cfg.j2 /tmp/tpl.bak

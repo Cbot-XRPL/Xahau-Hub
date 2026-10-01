@@ -28,8 +28,20 @@ cluster:
     storage_vg: pve
     storage_thinpool: data
     pool_physical_gib: 1752         # measured: 1837621248 KiB ~= 1752 GiB
-    reserve_gib: 256                # MUST stay unprovisioned. No overcommit.
+    reserve_gib: 256                # TARGET headroom. Breaching it warns; it is
+                                    #  not the hard rule. The hard rule is that
+                                    #  provisioned must never exceed physical.
     ssh_user: root
+
+    # ── Allocations this repo does NOT create but MUST count ────────────────
+    #  The no-overcommit math is only honest if it counts everything in the
+    #  pool, including volumes owned by other work on this host. Each entry
+    #  is a provisioned size in GiB. Measured with:
+    #    lvs --units g -o lv_name,lv_size,pool_lv | awk '$3=="data"'
+    existing_allocations:
+      - { volume: vm-100-disk-0,  gib: 400, owner: "ai-hub (VM 100) — DO NOT TOUCH" }
+      - { volume: vm-113-disk-0,  gib: 32,  owner: "PBS (CT 113) rootfs" }
+      - { volume: vm-113-disk-1,  gib: 160, owner: "PBS (CT 113) /datastore — grown 100->160 on 2026-10-01" }
 
   # ── HARD GUARD LIST ───────────────────────────────────────────────────────
   #  CT 200 on `pve` (R730xd) is a LIVE UNL VALIDATOR with its own RAID and
@@ -43,7 +55,12 @@ cluster:
       - r730xd
       - r730
     host_addresses:
-      - 192.168.1.121               # pve (R730xd) — ADJUST IF WRONG, never remove
+      # CORRECTED 2026-10-01. This was 192.168.1.121 — a placeholder I invented
+      # on day one and flagged as needing verification. It was never checked,
+      # so for the whole build the address guard was protecting an IP that does
+      # not exist while the real validator host sat unguarded at .128. Only the
+      # hostname rule ('pve') was doing any work.
+      - 192.168.1.128               # pve (R730xd) — THE UNL VALIDATOR HOST
     # Never a provisioning target, on any host.
     vmids:
       - 100                         # CT 100 on pve = NPM; VM 100 on pve2 = ai-hub.

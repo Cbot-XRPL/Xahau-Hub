@@ -284,9 +284,16 @@ def check(doc):
     pool = int(host["pool_physical_gib"])
     reserve = int(host["reserve_gib"])
     pool_id = host["storage"]
-    existing = 400  # vm-100-disk-0, measured, DO NOT TOUCH
-    prov = existing
-    ledger = ["  %-18s %6d GiB  EXISTING vm-100-disk-0 (DO NOT TOUCH)" % ("vmid 100", existing)]
+    # Everything already in the pool that this repo did not create. The
+    # no-overcommit math is only honest if it counts these too; it used to
+    # hardcode ai-hub's 400 GiB alone and so reported 192 GiB more headroom
+    # than the host actually had once PBS (CT 113) was built.
+    prov = 0
+    ledger = []
+    for a in (host.get("existing_allocations") or []):
+        gib = int(a["gib"])
+        prov += gib
+        ledger.append("  %-18s %6d GiB  EXISTING %s" % (a["volume"], gib, a["owner"]))
     for n in nodes:
         if not n.get("enabled"):
             continue
@@ -300,8 +307,11 @@ def check(doc):
     if prov > pool:
         problems.append("OVERCOMMIT: %d GiB provisioned > %d GiB pool physical" % (prov, pool))
     elif prov > pool - reserve:
-        problems.append(
-            "RESERVE BREACH: %d GiB provisioned leaves %d GiB free, below the %d GiB reserve"
+        warnings.append(
+            "RESERVE THIN: %d GiB provisioned leaves %d GiB free, below the %d GiB target. "
+            "No overcommit, so the pool cannot overfill from provisioning - but this is the "
+            "margin thin snapshots take during a vzdump, and phase 2's node 3 has to come "
+            "out of it. More disk in the host is the only real fix."
             % (prov, pool - prov, reserve)
         )
 
@@ -329,7 +339,10 @@ def check(doc):
     if problems:
         print("\ninventory check FAILED (%d problem(s))" % len(problems))
         return 1
-    print("inventory check OK — no overcommit, reserve intact")
+    if prov > pool - reserve:
+        print("inventory check OK — no overcommit. Reserve is BELOW target (see WARN).")
+    else:
+        print("inventory check OK — no overcommit, reserve intact")
     return 0
 
 

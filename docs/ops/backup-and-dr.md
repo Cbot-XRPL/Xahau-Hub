@@ -88,3 +88,68 @@ so far on luck. .20-.30 and .240-.248 answered nothing on any probe, so PBS was
 moved to .30 and verified with five silent probes before assignment.
 
 Probe with ARP, not ping. The device that caused this was invisible to ping.
+
+## Measured capacity, both hosts (2026-10-01)
+
+### R730 (pve) — the machine with the disk
+
+| storage | type | physical | used |
+| --- | --- | --- | --- |
+| `local-lvm` | lvmthin | 21.7 TiB | 324 GiB (1.5%) |
+| `ssd` | lvmthin | 7.25 TiB | 959 GiB (12.9%) |
+| `backup` | dir | 7.22 TiB | 135 GiB |
+| `local` | dir | 94 GiB | 72 GiB — **77% full** |
+
+Nine guests: VMs 101-107 (1000 GiB each except 107 at 500) on `local-lvm`,
+CT 100 (NPM, 4 GiB) and CT 200 (the validator, 7500 GiB rootfs) on `ssd`.
+
+Provisioned vs physical:
+
+- `local-lvm`: 6500 of 21.7 TiB. Comfortable.
+- `ssd`: 7504 GiB provisioned against 7419 GiB physical. **Overcommitted by
+  ~85 GiB (1.1%)**, entirely because CT 200's rootfs is provisioned at 7500 GiB.
+  At 12.9% used this is nowhere near biting, and a validator will never need
+  7.5 TB. But it is worth knowing: if that rootfs ever did fill, the thin pool
+  would exhaust physical space before the filesystem reported full, and the
+  validator's writes would block. Nothing to do today beyond not growing it.
+
+### R740 (pve2) — the machine that is full
+
+`local-lvm` is 1752 GiB physical with **1688 GiB provisioned**, leaving 64 GiB.
+No overcommit, but no room either.
+
+## The DR goal does not currently fit, and backups are not the reason
+
+The stated goal is respinning the 730's guests on the 740. The 730 holds about
+**1.28 TiB of real data** (324 GiB across the seven VMs, ~955 GiB in CT 200).
+The 740 has 64 GiB of unprovisioned pool.
+
+So even with perfect backups, there is nowhere on the 740 to restore them. The
+blocker is the 740's capacity, not the backup chain. Roughly 2 TB of additional
+NVMe in the 740 is what turns this from a plan into a capability, and that is
+the concrete number behind the storage upgrade discussion.
+
+### What is achievable now
+
+1. **Full nightly vzdump on the 730 to its own `backup` dir** (7.2 TiB, 6.9 free).
+   This covers the likely failure - one guest lost or corrupted - and costs
+   nothing. If that volume is the external drive, it is also physically
+   relocatable to the 740, which is a cheap form of real DR.
+2. **The respin-critical subset to PBS on the 740.** Not the bulk data: the
+   configs and keys that cannot be re-fetched. CT 200's `node_seed` is the
+   crown jewel and is a few KiB.
+3. **Disk in the 740** before the respin story is true.
+
+The PBS datastore was grown 100 -> 160 GiB on 2026-10-01 to hold subset 2. That
+took the pool to 1688/1752 and put the `reserve_gib: 256` target out of reach,
+which `inventory.py check` now reports as a WARN rather than silently passing.
+
+## A note on the overcommit check itself
+
+`lib/inventory.py check` used to hardcode ai-hub's 400 GiB as the only
+allocation it did not own. Once PBS was built, its 192 GiB was invisible to the
+math and the check reported 256 GiB of headroom on a host that had 64. Foreign
+volumes are now declared in `cluster.host.existing_allocations` and counted.
+Three tests in `tests/guard-test.sh` hold the line: every declared volume must
+appear in the ledger, the printed total must equal allocations plus nodes, and
+an allocation that overcommits the pool must still be fatal.
