@@ -74,14 +74,28 @@ allows  "a file with only a placeholder" guard_no_seed_in "$CLEAN"
 rm -f "$CLEAN"
 
 printf '\n── config invariants ───────────────────────────────────────────\n'
-refuses "ledger_history >= online_delete" bash -c '
-  set -e; cd "$XAH_REPO_ROOT"
-  cp config/roles/deep.yml /tmp/deep.bak
-  sed -i "s/^ledger_history_initial: .*/ledger_history_initial: 9000000/" config/roles/deep.yml
-  ./config/render-config.sh xah-node-1 --no-seed --out /tmp/badrender
-  rc=$?; cp /tmp/deep.bak config/roles/deep.yml; exit $rc'
-cp /tmp/deep.bak "$REPO_ROOT/config/roles/deep.yml" 2>/dev/null || true
-rm -rf /tmp/badrender /tmp/deep.bak
+# Edit a COPY of inventory.yml, not the role file. A node entry can override
+# ledger_history (xah-node-2 and xah-node-1 both carry temporary shed
+# overrides), and node fields beat role fields — so raising the value in
+# deep.yml silently changed nothing and the test passed a config it should
+# have refused. Test the effective value, which is what the guard reads.
+BADINV2="$(mktemp)"
+python3 - "$XAH_REPO_ROOT/inventory.yml" > "$BADINV2" <<'PYEOF'
+import re, sys
+out, in_node = [], False
+for line in open(sys.argv[1]):
+    if re.match(r"^  - name: xah-node-1\s*$", line): in_node = True
+    elif re.match(r"^  - name: ", line): in_node = False
+    if in_node and re.match(r"^    ledger_history(_initial)?: ", line):
+        line = re.sub(r": .*", ": 9000000", line)
+    out.append(line)
+sys.stdout.write("".join(out))
+PYEOF
+refuses "ledger_history >= online_delete" \
+  env XAH_INVENTORY="$BADINV2" "$XAH_REPO_ROOT/config/render-config.sh" xah-node-1 --no-seed --out /tmp/badrender
+allows "the real inventory still renders" \
+  "$XAH_REPO_ROOT/config/render-config.sh" xah-node-1 --no-seed --out /tmp/okrender
+rm -rf "$BADINV2" /tmp/badrender /tmp/okrender
 
 refuses "admin RPC bound to 0.0.0.0" bash -c '
   set -e; cd "$XAH_REPO_ROOT"

@@ -156,3 +156,84 @@ the measured GB-per-million-ledgers rather than from a guess.
 - `advisory_delete=1` and `prune-guard.sh` still drive pruning from disk
   pressure. A bigger, faster disk makes the window deeper, not the monitoring
   optional.
+
+
+---
+
+# Storage expansion — verified hardware facts
+
+Measured on the machine and read out of iDRAC on 2026-10-01, not taken from a
+spec sheet. Service tag **35Z3H13**, PowerEdge R740, 2U.
+
+## PCIe slots
+
+| slot | width | state |
+|---|---|---|
+| 1 | **x16** | free — GPU reserve |
+| 2 | x8 | free |
+| 3 | x8 | free |
+| 4 | **x16** | free — GPU reserve |
+| 5 | x8 | free |
+| 6 | x8 | **PERC H740P** (SAS3508) |
+| 7 | x8 | free |
+| 8 | **x16** | free — GPU reserve |
+
+Confirmed twice over: iDRAC's Slot Bifurcation page lists the width per slot,
+and `lspci -vv` on the H740P reports `LnkCap Width x8`, matching slot 6. The
+widths in the original spec were right.
+
+Empty slots do not enumerate a root port, so their width cannot be read from a
+running system — iDRAC is the only source. (`Empty Slot Unhide` in Integrated
+Devices would change that, at the cost of a reboot.)
+
+## Bifurcation IS supported
+
+iDRAC → Configuration → BIOS Settings → Integrated Devices → **Slot
+Bifurcation**. `Auto Discovery Bifurcation Settings` offers:
+
+- `Platform Default Bifurcation` — current; per-slot values are read-only
+- `Auto Discovery of Bifurcation` — BIOS reads the installed card and configures
+- `Manual Bifurcation Control` — per-slot values become editable
+
+**Use Auto Discovery**, with Manual as the fallback if a card fails to expose
+all its drives. Manual invites a specific trap: set a slot to x4x4, later fit a
+single x8 card, and lose an afternoon to a card that will not come up.
+
+**Do not change it before the hardware is physically in.** It requires a reboot
+of pve2, which stops both Xahau nodes and the ai-hub VM. It belongs in the same
+maintenance window as the install, not before it.
+
+## What the slots can hold
+
+Front bays are full — 8x 512 GB SATA SSD in RAID 10 (one 1.9 TB volume, the
+only thing the PERC exposes). There is no bay expansion; PCIe is the only path.
+
+Keeping slots 1, 4 and 8 free for GPUs leaves **four x8 slots**:
+
+| config | drives | @4 TB | @8 TB |
+|---|---|---|---|
+| no bifurcation | 4 | 16 TB | 32 TB |
+| x4x4 (2 per slot) | 8 | 32 TB | **64 TB** |
+| x4x4 + one x16 given up to a quad card | 12 | 48 TB | 96 TB |
+
+At the measured 992 GiB/million ledgers, 64 TB is about **2.5x the whole of
+Xahau history today** (~25 TiB), growing ~9 TiB/year.
+
+## For BACKUPS specifically, flash is the wrong purchase
+
+Backups are sequential, large and cold. An **HBA plus an external SAS
+enclosure** uses ONE x8 slot, needs no bifurcation, has no thermal risk, and
+reaches 100-400 TB for less than any M.2 configuration above.
+
+Reserve the bifurcated M.2 capacity for node databases, where the IOPS are
+actually consumed. The two needs look similar on a shopping list and are not
+the same problem.
+
+## Two things to watch on M.2 in this chassis
+
+- **Cooling.** M.2 in a 2U server with no directed airflow throttles under
+  sustained NuDB writes. Adapters with heatsinks, and check temperatures under
+  real load rather than at idle.
+- **Redundancy.** 25 TiB is not resyncable in any practical time, so a
+  full-history node on a stripe is a node you will rebuild from the network one
+  day. RAID10 halves usable capacity; budget for it rather than discovering it.

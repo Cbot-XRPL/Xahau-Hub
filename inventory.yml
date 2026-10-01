@@ -301,6 +301,20 @@ nodes:
     db_storage: local-lvm
     ssh_user: root
     seed_var: XAH_NODE_1_SEED
+
+    # ── TEMPORARY OVERRIDE — remove once this node has shed ─────────────────
+    #  Same shape as node 2 had: ~628,000 ledgers in a 446 GB writable backend
+    #  with a 12 KB archive, at 94% of the volume. At the role's 150,000 it
+    #  would rotate in ~9 days and ENOSPC in ~2.
+    #
+    #  10,000 is far below the 280,812 ledgers elapsed since lastRotated
+    #  (25,767,806), so rotation ONE fires immediately and rotation TWO lands
+    #  ~10h later, needing only ~10 GB of new writable against 48 GB free.
+    #  Then the 446 GB archive is dropped.
+    online_delete: 10000
+    ledger_history: 8000
+    ledger_history_initial: 8000
+
     notes: >-
       Deep history node. Backfills first. Keep OUT of the public pool until
       latency is characterised; deep queries route here explicitly.
