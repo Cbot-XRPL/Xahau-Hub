@@ -153,3 +153,107 @@ volumes are now declared in `cluster.host.existing_allocations` and counted.
 Three tests in `tests/guard-test.sh` hold the line: every declared volume must
 appear in the ledger, the printed total must equal allocations plus nodes, and
 an allocation that overcommits the pool must still be fatal.
+
+## The R730, measured directly (2026-10-01)
+
+Three disks, all behind the PERC H730 Mini:
+
+| device | size | role |
+| --- | --- | --- |
+| `sda` | 21.8 TB | VG `pve` — root, and the `local-lvm` thin pool (VMs 101-107) |
+| `sdb` | 7.3 TB | VG `ssd` — the `ssd` thin pool (CT 100, CT 200) |
+| `sdc1` | 7.3 TB | ext4 at `/mnt/backup` — the IronWolf, the `backup` dir storage |
+
+The IronWolf is **internal**, mounted from `/etc/fstab` by UUID with `nofail`.
+It is not the removable drive. No Sabrent was attached at the time of writing,
+and there is no trace of an offsite flow anywhere on the host: no root crontab,
+no systemd timer, no script beyond `/root/evernode_destroy.sh`. Whatever ran
+before was a hand-run `vzdump`, and there is nothing here to collide with.
+
+## CT 200 was already protected before this repo touched it
+
+The nightly 21:00 job had been backing up the validator in `snapshot` mode
+since at least 2026-09-28. The 09-30 run:
+
+    status = running
+    backup mode: snapshot
+    ionice priority: 7
+    Total bytes written: 18004285440 (17GiB, 123MiB/s)
+    archive file size: 5.84GB
+    Finished Backup of VM 200 (00:02:26)
+
+`xahaud` has been PID 2344149 since 2026-09-29 09:59:41 — it predates two of
+those backups and never restarted through either. A thin snapshot of a running
+LXC costs the container nothing; the proof is the process start time.
+
+Adding the offsite copy on 2026-10-01 behaved identically:
+
+    root.pxar: had to backup 15.857 GiB of 16.167 GiB (compressed 6.04 GiB) in 143.74 s
+    Finished Backup of VM 200 (00:02:29)
+
+with `--bwlimit 80000 --ionice 7`, and `xahaud` still PID 2344149, same start
+time, same RSS, `etimes` advanced by exactly the backup's duration.
+
+**The rule for this container: `mode snapshot`, always.** `suspend` and `stop`
+both take the validator off the network. Nothing else about backing it up is
+delicate.
+
+## A correction: thin `data_percent` is not live data
+
+Earlier in this file the 730's real data was put at ~1.28 TiB and the 740 was
+said to need ~2 TB of disk before DR was possible. That was measured from thin
+pool allocation, and it was wrong.
+
+`ssd/vm-200-disk-0` reports 12.74% of 7500 GiB allocated — 955 GiB. CT 200's
+filesystem holds **16.17 GiB**. The other ~939 GiB is blocks that ledger
+rotations wrote and freed, and which were never returned to the pool. The thin
+pool has `Discards: passdown`, so an `fstrim` inside CT 200 would hand all of it
+back. That is the same pathology that was costing the 740's nodes 166 GiB.
+
+What the 730 actually holds, from one real backup run:
+
+| guest | archive |
+| --- | --- |
+| CT 100 (NPM) | 0.73 GiB |
+| CT 200 (validator) | 5.84 GiB |
+| VM 101 WebsiteServer | 16.86 GiB |
+| VM 102 One-Xah | 9.30 GiB |
+| VM 104 NewTerra | 8.22 GiB |
+| VM 105 XahauVault | 11.96 GiB |
+| VM 106 cbot-labs | 8.16 GiB |
+| **total (7 of 9)** | **61.07 GiB** |
+
+With VM 103 and VM 107 added, a full run is roughly 100 GiB compressed.
+
+### So the revised DR position
+
+**Backups** of the entire 730 fit on the 740 today — about 100 GiB for a first
+run into a 157 GiB datastore, deltas after that. Holding a full retention ladder
+for both hosts wants ~250 GiB, which is one 1 TB NVMe, not the 2 TB previously
+claimed.
+
+**Restores** are the real constraint, and only for the QEMU guests. `qmrestore`
+recreates a disk at its original size, so VMs 101-107 need 6500 GiB provisioned
+no matter that they hold 324 GiB. The 740 has 64 GiB unprovisioned. In an actual
+disaster you would knowingly overcommit — 324 GiB of data into a 1752 GiB pool
+is fine by usage — or restore selectively.
+
+**CT 200 is the exception, and it is the one that matters.** `pct restore`
+accepts `--rootfs <storage>:<size>`, so the validator can be restored onto the
+740 as a modest container rather than a 7500 GiB one. 16 GiB of data. That
+capability exists right now.
+
+## Job layout on the 730 after consolidation
+
+Two jobs created on 2026-10-01 initially collided with the operator's existing
+one: a second `--all` job writing full copies of everything to the same
+IronWolf. That duplicate was removed and the pre-existing 21:00 job was widened
+instead, because VM 103 and VM 107 had **no backups at all**.
+
+| job | guests | target | schedule | retention |
+| --- | --- | --- | --- | --- |
+| `backup-0cfaec17-9703` | all | `backup` (IronWolf) | 21:00 | 7d / 4w / 3m |
+| `backup-730-dr` | 100, 102, 105, 106, 200 | `pbs-740` | 04:00 | 3d / 2w |
+
+The IronWolf has 6.8 TiB free, so ~14 full copies at ~100 GiB cost 1.4 TiB. The
+previous `keep-last=2` was leaving far more space idle than it needed to.
