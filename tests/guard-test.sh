@@ -86,9 +86,16 @@ out, in_node = [], False
 for line in open(sys.argv[1]):
     if re.match(r"^  - name: xah-node-1\s*$", line): in_node = True
     elif re.match(r"^  - name: ", line): in_node = False
-    if in_node and re.match(r"^    ledger_history(_initial)?: ", line):
-        line = re.sub(r": .*", ": 9000000", line)
+    # INSERT the override rather than editing an existing one. Editing assumed
+    # a node-level ledger_history line exists, which is only true while a
+    # temporary shed override is in place — so the test silently stopped
+    # testing anything the moment those were removed. Inserting works either
+    # way, because node fields beat role fields regardless.
     out.append(line)
+    if in_node and re.match(r"^    name: |^  - name: xah-node-1", line):
+        out.append("    ledger_history: 9000000\n")
+        out.append("    ledger_history_initial: 9000000\n")
+        in_node = False
 sys.stdout.write("".join(out))
 PYEOF
 refuses "ledger_history >= online_delete" \

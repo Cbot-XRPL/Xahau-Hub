@@ -302,18 +302,6 @@ nodes:
     ssh_user: root
     seed_var: XAH_NODE_1_SEED
 
-    # ── TEMPORARY OVERRIDE — remove once this node has shed ─────────────────
-    #  Same shape as node 2 had: ~628,000 ledgers in a 446 GB writable backend
-    #  with a 12 KB archive, at 94% of the volume. At the role's 150,000 it
-    #  would rotate in ~9 days and ENOSPC in ~2.
-    #
-    #  10,000 is far below the 280,812 ledgers elapsed since lastRotated
-    #  (25,767,806), so rotation ONE fires immediately and rotation TWO lands
-    #  ~10h later, needing only ~10 GB of new writable against 48 GB free.
-    #  Then the 446 GB archive is dropped.
-    online_delete: 10000
-    ledger_history: 8000
-    ledger_history_initial: 8000
 
     notes: >-
       Deep history node. Backfills first. Keep OUT of the public pool until
@@ -335,23 +323,6 @@ nodes:
     ssh_user: root
     seed_var: XAH_NODE_2_SEED
 
-    # ── TEMPORARY OVERRIDE — remove once this node has shed ─────────────────
-    #  Node fields win over the role file, so these two beat config/roles/api.yml.
-    #
-    #  This node backfilled ~232,000 ledgers into its WRITABLE backend while
-    #  the archive stayed empty, so it is holding 236 GB of a 300 GiB volume
-    #  with nothing droppable. At the role's 90,000 it would not rotate for
-    #  2.7 days and would hit the cap first.
-    #
-    #  20,000 is below the 22,266 ledgers already elapsed since lastRotated
-    #  (25,767,981), so rotation ONE fires immediately: the 236 GB writable
-    #  becomes the archive. Rotation TWO, ~19h later, drops it. Peak in
-    #  between is ~257 GB (80%), then it falls to ~21 GB.
-    #
-    #  Then delete these two lines and redeploy to pick up the role's 90,000.
-    online_delete: 20000
-    ledger_history: 18000
-    ledger_history_initial: 18000
 
     notes: >-
       General API node. Primary public upstream. Currently shedding an
