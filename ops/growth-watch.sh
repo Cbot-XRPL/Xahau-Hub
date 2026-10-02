@@ -155,14 +155,21 @@ if [ "$MODE" = guest ]; then
           printf('%.0f', 100.0*freelist_count/page_count)
         from pragma_page_count, pragma_freelist_count, pragma_page_size;" 2>/dev/null | tr '|' ' ')
       [ -n "${freepct:-}" ] || continue
+      # A percentage alone is noise on a small file: ledger.db sits at ~77%
+      # free pages while holding 0.2 GiB of reclaimable space, which would cry
+      # crit forever and train everyone to ignore this line. Gate on the
+      # ABSOLUTE reclaim as well, so only a file worth stopping a node for
+      # raises its voice.
+      RECLAIM="$(awk -v t="$total" -v l="$live" 'BEGIN{printf "%.1f", t-l}')"
       blvl=ok
-      [ "$freepct" -ge "${SQLITE_BLOAT_WARN:-40}" ] && blvl=warn
-      [ "$freepct" -ge "${SQLITE_BLOAT_CRIT:-65}" ] && blvl=crit
-      say "$(printf '%-22s live %s GiB of %s GiB, %s%% free pages  [%s]' \
-        "$(basename "$f") pages" "$live" "$total" "$freepct" "$blvl")"
+      if awk -v r="$RECLAIM" -v m="${SQLITE_BLOAT_MIN_GIB:-5}" 'BEGIN{exit !(r>=m)}'; then
+        [ "$freepct" -ge "${SQLITE_BLOAT_WARN:-40}" ] && blvl=warn
+        [ "$freepct" -ge "${SQLITE_BLOAT_CRIT:-65}" ] && blvl=crit
+      fi
+      say "$(printf '%-22s live %s GiB of %s GiB, %s%% free pages, %s GiB reclaimable  [%s]' \
+        "$(basename "$f") pages" "$live" "$total" "$freepct" "$RECLAIM" "$blvl")"
       if [ "$blvl" != ok ]; then
-        warn "$(basename "$f") is ${freepct}% free pages — $(awk -v t="$total" -v l="$live" \
-          'BEGIN{printf "%.0f", t-l}') GiB reclaimable. Run: ops/vacuum-tx-db.sh $NODE"
+        warn "$(basename "$f") is ${freepct}% free pages — ${RECLAIM} GiB reclaimable. Run: ops/vacuum-tx-db.sh $NODE"
       fi
     done
   fi
