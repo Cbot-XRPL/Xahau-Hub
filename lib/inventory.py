@@ -280,6 +280,23 @@ def check(doc):
                         "%s: %s=%s fills %.0f%% of its %d GiB volume — above the %d%% warn line, so it will live in disk-pressure pruning rather than reaching a steady state"
                         % (n["name"], key, f"{ledgers:,}", 100 * need / cap, cap, warn_pct))
 
+            # online_delete is a ROTATION INTERVAL, so NuDB holds a writable
+            # and an archive backend and peaks at 2x it just before dropping
+            # the archive. That peak - not ledger_history - is what filled this
+            # node to 94%. The role files have always said so in prose; this is
+            # the check that holds it.
+            od = rc.get("online_delete")
+            if isinstance(od, int):
+                peak = od * 2 / 1_000_000 * float(rate)
+                if peak > cap:
+                    problems.append(
+                        "%s: online_delete=%s peaks at 2x = %s ledgers, ~%.0f GiB at the measured %s GiB/million, but the volume is %d GiB (%.1fx over)"
+                        % (n["name"], f"{od:,}", f"{od*2:,}", peak, rate, cap, peak / cap))
+                elif peak > cap * warn_pct / 100.0:
+                    warnings.append(
+                        "%s: online_delete=%s peaks at ~%.0f GiB (%.0f%% of its %d GiB volume) just before a rotation — above the %d%% warn line"
+                        % (n["name"], f"{od:,}", peak, 100 * peak / cap, cap, warn_pct))
+
     # ── no-overcommit math, phase 1 pool only ────────────────────────────────
     pool = int(host["pool_physical_gib"])
     reserve = int(host["reserve_gib"])

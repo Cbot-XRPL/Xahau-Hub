@@ -37,9 +37,30 @@ peers_max: 40
 #  150,000 x 2 = 300,000 ledgers x 992 GiB/million = ~298 GiB = 43% of 700 GiB.
 #  Served history therefore ranges from 150,000 to 300,000 ledgers — roughly
 #  6 to 12 days. That is what 700 GiB buys at the measured rate.
-online_delete: 150000
-ledger_history: 130000
-ledger_history_initial: 130000
+#  DEEPENED 2026-10-02, after reclaiming 161 GiB that was never real data.
+#  transaction.db had grown to 192.6 GiB holding 40.8 GiB of live pages — 78%
+#  of the file was free pages that online_delete had emptied and SQLite never
+#  returned. A VACUUM took it to 40 GiB and the volume from 314 GiB used to
+#  153 GiB. Pruning was working correctly the whole time; the file simply does
+#  not shrink on its own.
+#
+#  Re-measured per 1000 ledgers on the live node rather than using the blended
+#  992 GiB/million: NuDB 0.763 GiB, transaction.db 0.285 GiB. NuDB holds 2x
+#  online_delete, the SQLite files hold one ledger_history window:
+#
+#    200,000 x 2 x 0.763  =  305 GiB   NuDB at peak, just before a rotation
+#    180,000 x 0.285      =   51 GiB   transaction.db, freshly vacuumed
+#                            --------
+#                            ~356 GiB  = 51% of the 700 GiB volume
+#
+#  That holds even allowing for transaction.db re-bloating, which is the
+#  variable to watch: left alone it reached 4.7x its live size. At that
+#  multiple the total goes to ~545 GiB (78%), which prune-guard can still
+#  defend but which is no longer a steady state. Re-vacuum before raising
+#  this again, and see docs/ops/backup-and-dr.md for the SQLITE_TMPDIR trap.
+online_delete: 200000
+ledger_history: 180000
+ledger_history_initial: 180000
 
 advisory_delete: 1                 # nothing prunes until can_delete is called
 use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
@@ -49,7 +70,11 @@ use_tx_tables: 1                   # account_tx depends on it. NEVER disable.
 sqlite_page_size: 32768
 sqlite_journal_mode: wal
 sqlite_synchronous: normal
-sqlite_temp_store: file
+sqlite_temp_store: file       # NOTE: with temp_store=file, a manual VACUUM
+                              #  writes its rebuild to /var/tmp — on the 46 GiB
+                              #  ROOT disk, not the data volume. It came within
+                              #  ~1 GiB of filling / on 2026-10-02. Always run
+                              #  SQLITE_TMPDIR=/var/lib/xahaud/sqlite-tmp.
 
 # Rolling-window pruning is driven by ops/prune-guard.sh from disk pressure,
 # not by xahaud's internal count-based schedule.

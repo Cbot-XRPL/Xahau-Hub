@@ -155,6 +155,26 @@ PYBAD
   XAH_INVENTORY="$BAD" python3 lib/inventory.py check >/dev/null 2>&1
   rc=$?; rm -f "$BAD"; exit $rc'
 
+echo
+echo "── the pool math respects the 2x rotation peak ───────────────────"
+
+# online_delete is a rotation INTERVAL: NuDB keeps a writable AND an archive
+# backend, so disk peaks at 2x it. ledger_history was checked against the
+# volume from the start; online_delete was not, and that peak is what filled
+# xah-node-1 to 94%.
+refuses "an online_delete whose 2x peak exceeds the volume" bash -c '
+  cd "$XAH_REPO_ROOT"
+  BAK="$(mktemp)"; cp config/roles/deep.yml "$BAK"
+  sed -i "s/^online_delete: [0-9]*$/online_delete: 400000/" config/roles/deep.yml
+  python3 lib/inventory.py check >/dev/null 2>&1
+  rc=$?; cp "$BAK" config/roles/deep.yml; rm -f "$BAK"; exit $rc'
+
+allows "the shipped online_delete fits with room to spare" bash -c '
+  cd "$XAH_REPO_ROOT"
+  out="$(python3 lib/inventory.py check 2>&1)" || exit 1
+  echo "$out" | grep -q "online_delete.*peaks at" && { echo "shipped value already warns"; exit 1; }
+  exit 0'
+
 refuses "admin RPC bound to 0.0.0.0" bash -c '
   set -e; cd "$XAH_REPO_ROOT"
   cp config/xahaud.cfg.j2 /tmp/tpl.bak
