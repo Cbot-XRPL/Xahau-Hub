@@ -287,7 +287,17 @@ def check(doc):
             # the check that holds it.
             od = rc.get("online_delete")
             if isinstance(od, int):
-                peak = od * 2 / 1_000_000 * float(rate)
+                # Prefer the decomposed rates: NuDB scales off 2x online_delete,
+                # the SQLite files off one ledger_history window. A single
+                # blended rate cannot express that.
+                nudb_rate = measured.get("nudb_gib_per_million")
+                sql_rate = measured.get("sqlite_gib_per_million")
+                lh_for_peak = rc.get("ledger_history")
+                if nudb_rate and sql_rate and isinstance(lh_for_peak, int):
+                    peak = (od * 2 / 1_000_000 * float(nudb_rate)
+                            + lh_for_peak / 1_000_000 * float(sql_rate))
+                else:
+                    peak = od * 2 / 1_000_000 * float(rate)
                 if peak > cap:
                     problems.append(
                         "%s: online_delete=%s peaks at 2x = %s ledgers, ~%.0f GiB at the measured %s GiB/million, but the volume is %d GiB (%.1fx over)"
@@ -296,6 +306,22 @@ def check(doc):
                     warnings.append(
                         "%s: online_delete=%s peaks at ~%.0f GiB (%.0f%% of its %d GiB volume) just before a rotation — above the %d%% warn line"
                         % (n["name"], f"{od:,}", peak, 100 * peak / cap, cap, warn_pct))
+
+                # The peak above assumes a freshly vacuumed transaction.db.
+                # Left alone it drifted to 4.7x its live size, and sizing that
+                # only holds while someone remembers to vacuum is not sizing.
+                # Judge the window against the re-bloated case too.
+                bloat = measured.get("sqlite_bloat_factor")
+                crit_pct = int(dig(doc, "cluster.thresholds.db_crit_pct"))
+                if bloat and nudb_rate and sql_rate and isinstance(lh_for_peak, int):
+                    drifted = (od * 2 / 1_000_000 * float(nudb_rate)
+                               + lh_for_peak / 1_000_000 * float(sql_rate) * float(bloat))
+                    if drifted > cap * crit_pct / 100.0:
+                        warnings.append(
+                            "%s: online_delete=%s is only safe while transaction.db stays vacuumed — "
+                            "at the observed %sx bloat it reaches ~%.0f GiB (%.0f%% of %d GiB), past the %d%% crit line. "
+                            "growth-watch reports the free-page share; remedy is ops/vacuum-tx-db.sh"
+                            % (n["name"], f"{od:,}", bloat, drifted, 100 * drifted / cap, cap, crit_pct))
 
     # ── no-overcommit math, phase 1 pool only ────────────────────────────────
     pool = int(host["pool_physical_gib"])

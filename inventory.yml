@@ -284,6 +284,27 @@ cluster:
     nudb_share_pct: 69
     sqlite_share_pct: 31
 
+    #  DECOMPOSED 2026-10-02, on xah-node-1 directly. The blended figure above
+    #  is not wrong, it is just not usable for sizing: NuDB and the SQLite
+    #  files scale off DIFFERENT settings. NuDB holds up to 2x online_delete
+    #  because it keeps a writable and an archive backend; transaction.db holds
+    #  one ledger_history window. Sizing with one blended number therefore
+    #  under-counts the rotation peak and over-counts the SQLite side.
+    #
+    #  Measured: 112 GiB of NuDB and 43 GiB of transaction.db holding 147,537
+    #  ledgers, with transaction.db freshly vacuumed.
+    #
+    #    peak GiB = 2 x online_delete x nudb_gib_per_million / 1e6
+    #             +     ledger_history x sqlite_gib_per_million / 1e6
+    #
+    #  sqlite_bloat_factor is how far transaction.db drifted above its live
+    #  size when left alone: 192.6 GiB of file for 40.8 GiB of data. Multiply
+    #  the SQLite term by it to see the pre-vacuum worst case.
+    nudb_gib_per_million: 759
+    sqlite_gib_per_million: 291
+    sqlite_bloat_factor: 4.7
+    decomposed_on: "2026-10-02"
+
   # ── Growth / prune thresholds (see docs/DECISIONS.md) ─────────────────────
   thresholds:
     db_warn_pct: 60                 # growth-watch.sh warn

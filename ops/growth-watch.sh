@@ -139,6 +139,34 @@ if [ "$MODE" = guest ]; then
     say "$(printf '%-22s %s' "$(basename "$f")" "$(du -sh "$f" 2>/dev/null | cut -f1)")"
   done
 
+  # ── SQLite free pages ────────────────────────────────────────────────────
+  #  online_delete prunes rows correctly but SQLite never returns the emptied
+  #  pages, so these files only ever grow. transaction.db reached 192.6 GiB
+  #  holding 40.8 GiB of live data on xah-node-1 — more disk than the whole
+  #  NuDB, and the reason that node hit 94%. Sizing assumes a vacuumed file,
+  #  so this drift is the thing that invalidates it. Remedy:
+  #  ops/vacuum-tx-db.sh NODE (never a bare `sqlite3 VACUUM`, see its header).
+  if command -v sqlite3 >/dev/null 2>&1; then
+    for f in "$MOUNT"/db/transaction.db "$MOUNT"/db/ledger.db; do
+      [ -e "$f" ] || continue
+      read -r live total freepct < <(sqlite3 "$f" "select
+          printf('%.1f', (page_count-freelist_count)*page_size/1073741824.0),
+          printf('%.1f', page_count*page_size/1073741824.0),
+          printf('%.0f', 100.0*freelist_count/page_count)
+        from pragma_page_count, pragma_freelist_count, pragma_page_size;" 2>/dev/null | tr '|' ' ')
+      [ -n "${freepct:-}" ] || continue
+      blvl=ok
+      [ "$freepct" -ge "${SQLITE_BLOAT_WARN:-40}" ] && blvl=warn
+      [ "$freepct" -ge "${SQLITE_BLOAT_CRIT:-65}" ] && blvl=crit
+      say "$(printf '%-22s live %s GiB of %s GiB, %s%% free pages  [%s]' \
+        "$(basename "$f") pages" "$live" "$total" "$freepct" "$blvl")"
+      if [ "$blvl" != ok ]; then
+        warn "$(basename "$f") is ${freepct}% free pages — $(awk -v t="$total" -v l="$live" \
+          'BEGIN{printf "%.0f", t-l}') GiB reclaimable. Run: ops/vacuum-tx-db.sh $NODE"
+      fi
+    done
+  fi
+
   USED_G="${USED%G}"
   HIST="$STATE_DIR/db-history.tsv"
   printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$USED_G" "$P" >> "$HIST"
