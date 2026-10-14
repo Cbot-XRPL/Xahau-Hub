@@ -243,6 +243,18 @@ cluster:
     # ExecStart there. We replace that file with a symlink to xahaud_cfg so
     # there is exactly ONE config, whichever path is used to reach it.
     xahaud_installer_cfg: /opt/xahaud/etc/xahaud.cfg
+
+    # ── xahaud release pin ───────────────────────────────────────────────────
+    #  What every node must run. ops/upgrade-node.sh moves a node here and
+    #  refuses a binary whose sha256 (GitHub release asset) or md5
+    #  (build.xahau.tech releaseinfo) does not match. A release that carries
+    #  amendments is a deadline: once one activates, an older build exits with
+    #  "XAHAUD STOPPED: UPGRADE REQUIRED". Bump all three together.
+    #  PINNED 2026-10-14: validators were asked to move to this build.
+    xahaud_version: "2026.10.13-release+4119"
+    xahaud_sha256: "1c5b2988c88c9a49abb95bc8974289f253167cf0b5121d7412b60b37533d0d2a"
+    xahaud_md5: "8d134d0a577a3b1680134f43b0479ba7"
+    xahaud_release_url: "https://github.com/Xahau/xahaud/releases/tag/2026.10.13-release%2B4119"
     ops_dir: /opt/xahau-hub
 
     # WebSocket hardening, from Xahau's own shipped defaults. A subscribe is a

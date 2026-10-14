@@ -359,3 +359,40 @@ systemctl status xahaud
 journalctl -u xahaud -f
 tail -f /var/log/xahaud/debug.log
 ```
+
+## Upgrading xahaud (a release with amendments is a deadline)
+
+When Xahau publishes a release that carries amendments, validators move
+first, the amendments reach 80% support, and roughly two weeks later they
+activate. At that moment any node still on the old build exits with
+`XAHAUD STOPPED: UPGRADE REQUIRED` and stays down. The cluster must be on the
+new build before that, not after.
+
+1. Pin the release in `inventory.yml` — `cluster.defaults.xahaud_version`,
+   `xahaud_sha256` (from the GitHub release asset) and `xahaud_md5` (from
+   `https://build.xahau.tech/<version>.releaseinfo`). All three together.
+2. Check the release notes against `config/xahaud.cfg.j2` for required
+   config changes. 2026.10.13+4119 needed none (we run NuDB; it retired
+   `rwdb`-with-`pinned_type`).
+3. Stage everywhere, touch nothing:
+   `ops/upgrade-node.sh xah-node-1 --dry-run` and the same for node 2.
+   This downloads to `/opt/xahaud/downloads/` while the old build keeps
+   serving, and checks sha256, md5 and `--version` before anything can run it.
+4. Swap the non-public node: `ops/upgrade-node.sh xah-node-1`. One restart;
+   it waits for `server_state=full` and asserts `build_version`. Measured:
+   95 s from stop to full.
+5. Swap the public node behind the failover, in one chain so nginx only
+   comes back if node 2 does:
+   `ops/public-failover.sh xah-node-2 --to xah-node-1 && ops/upgrade-node.sh xah-node-2 && ops/public-failover.sh xah-node-2 --restore`
+   If the middle step fails, the tool has already reverted node 2 to the old
+   binary and restarted it, and nginx is still on node 1 — the public endpoint
+   never dropped. Fix, then re-run the chain.
+6. Verify: `https://cbotlabs.xyz/api/cluster` shows both nodes `full`, and
+   node 1's `complete_ledgers` has re-registered its full window (it reports a
+   narrow range for a minute or two after any restart — that is the
+   complete-ledger set rebuilding, not lost history).
+
+Why not the official installer for upgrades: it refuses to run while xahaud
+is up (it resolves the symlink and decides the daemon is "in the wrong
+place"), so using it means stopping the node just to download, and it checks
+nothing it downloads. It still provisions fresh nodes.

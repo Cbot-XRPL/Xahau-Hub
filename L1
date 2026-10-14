@@ -1,0 +1,28 @@
+== L1 @ ledger 26477783: members 8 | seat 9: EMPTY | votes for you: 5 / need 6
+   voted: []
+== DEV TABLE (L1 seat 6) r4FRPZbLnyuVeGiSi1Ap6uaaPvPXYZh1XN: 8 members
+   L2 seat  0  r42noEGvAqfwXnDBebeEPfYVswZVe6CKPo
+   L2 seat  1  r47tpT8LUoymNgRWzfUq2LdkPRfo4UZSkB
+   L2 seat  2  rscan6NzxxSFxEQST8qALrc5v9mpM8fU1j
+   L2 seat  3  rWiNRBZaEHFptxtkdohBbk36UxoHVwvEa
+   L2 seat  4  rtequsfcSxEerbj18TdS6hUd89vTbaWec
+   L2 seat  6  riLD4RiZcmFLijuBkBr1qLa5tXbojgNSN
+   L2 seat  7  raZYXq4xReKiDUb2fUKe5sxrTkbUcoUUUU
+   L2 seat  8  rMR7pbJsVLTSEWNh7uNJPKJMfryLdwGgv9
+   internal votes Cbot Labs - seat 9: 5  (51% of 8 members = 5 needed)
+     - voted: r42noEGvAqfwXnDBebeEPfYVswZVe6CKPo
+     - voted: r47tpT8LUoymNgRWzfUq2LdkPRfo4UZSkB
+     - voted: rWiNRBZaEHFptxtkdohBbk36UxoHVwvEa
+     - voted: raZYXq4xReKiDUb2fUKe5sxrTkbUcoUUUU
+     - voted: rMR7pbJsVLTSEWNh7uNJPKJMfryLdwGgv9
+   other votes on this table: [('seat7', 'L2', 'rWiNRBZaE', 'raZYXq4xR'), ('seat7', 'L2', 'rtequsfcS', 'raZYXq4xR'), ('seat8', 'L2', 'r47tpT8LU', 'rMR7pbJsV'), ('seat8', 'L2', 'r42noEGvA', 'rMR7pbJsV'), ('seat7', 'L2', 'r42noEGvA', 'raZYXq4xR'), ('seat8', 'L2', 'raZYXq4xR', 'rMR7pbJsV'), ('seat7', 'L2', 'rscan6Nzx', 'raZYXq4xR'), ('seat7', 'L2', 'r47tpT8LU', 'raZYXq4xR')]
+== EXCHANGE TABLE (L1 seat 8) rHsh4MNWJKXN2YGtSf95aEzFYzMqwGiBve: 2 members
+   L2 seat  0  rfKsmLP6sTfVGDvga6rW6XbmSFUzc3G9f3
+   L2 seat  2  rGshbE2xPc2Jw66iTAXuX5RjXmJW4ohbrY
+   internal votes Cbot Labs - seat 9: 0  (51% of 2 members = 2 needed)
+   other votes on this table: [('seat7', 'L1', 'rB3egB3cm', 'rhoLvTp'), ('seat2', 'L2', 'r4vv7gFjt', 'rhoLvTp'), ('seat1', 'L2', 'rB3egB3cm', 'rhoLvTp'), ('seat2', 'L2', 'rGshbE2xP', 'rGshbE2xP'), ('seat7', 'L1', 'rGshbE2xP', 'rhoLvTp'), ('seat0', 'L2', 'r4vv7gFjt', 'rhoLvTp'), ('seat1', 'L2', 'rGshbE2xP', 'rhoLvTp'), ('seat3', 'L2', 'rGshbE2xP', 'rhoLvTp')]
+== PROJECTS TABLE (L1 seat 5) rwyypATD1dQxDbdQjMvrqnsHr2cQw5rjMh: 2 members
+   L2 seat  0  rJFxdrd1BuMeJshRAZBuHP3hex9DjH1nnr
+   L2 seat  1  rHMtqVuvEESUhPrsgb8tSa5ghjyoQySfVC
+   internal votes Cbot Labs - seat 9: 0  (51% of 2 members = 2 needed)
+   other votes on this table: [('seat7', 'L1', 'rHMtqVuvE', 'rhoLvTp'), ('seat2', 'L2', 'rHMtqVuvE', 'rhoLvTp'), ('seat7', 'L1', 'rJFxdrd1B', 'rhoLvTp'), ('seat2', 'L2', 'rJFxdrd1B', 'rhoLvTp')]

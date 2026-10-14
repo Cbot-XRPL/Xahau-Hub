@@ -178,6 +178,29 @@ allows "the shipped rotation peak is under the warn line" bash -c '
   echo "$out" | grep -q "online_delete.*peaks at" && { echo "shipped value already warns"; exit 1; }
   exit 0'
 
+echo
+echo "── upgrade and failover tools inherit the guard ──────────────────"
+
+# These are `allows` on purpose: the assertion is "the tool exits non-zero AND
+# says GUARD: refusing" - a plain `refuses` cannot see the message, and a
+# pipe into grep -q would turn a refusal into exit 0.
+guard_refused() {   # guard_refused <cmd...> -> 0 iff cmd failed with the guard message
+  local out; out="$("$@" 2>&1)" && return 1
+  grep -q "GUARD: refusing" <<<"$out"
+}
+export -f guard_refused
+allows "upgrade-node.sh refuses the validator host address" bash -c '
+  cd "$XAH_REPO_ROOT" && guard_refused ops/upgrade-node.sh 192.168.1.128 --dry-run'
+allows "upgrade-node.sh refuses the validator hostname" bash -c '
+  cd "$XAH_REPO_ROOT" && guard_refused ops/upgrade-node.sh pve --dry-run'
+allows "public-failover.sh refuses to fail over TO the validator host" bash -c '
+  cd "$XAH_REPO_ROOT" && guard_refused ops/public-failover.sh xah-node-2 --to 192.168.1.128'
+allows "upgrade-node.sh reads the pinned release from inventory" bash -c '
+  cd "$XAH_REPO_ROOT"
+  v="$(python3 lib/inventory.py get cluster.defaults.xahaud_version)"
+  s="$(python3 lib/inventory.py get cluster.defaults.xahaud_sha256)"
+  [ -n "$v" ] && [ "${#s}" = 64 ]'
+
 refuses "admin RPC bound to 0.0.0.0" bash -c '
   set -e; cd "$XAH_REPO_ROOT"
   cp config/xahaud.cfg.j2 /tmp/tpl.bak
